@@ -9,7 +9,7 @@ import h5py
 from torchvision import transforms
 from PIL import Image
 import numpy as np
-from scipy.misc import imread, imresize
+from imageio import imread
 from collections import defaultdict
 
 '''
@@ -108,7 +108,8 @@ def process_question(root, split, word_dic=None, answer_dic=None, question_subdi
             for i, image_path in enumerate(tqdm.tqdm(image_filename_2_hdf5_idx_dict.keys())):
                 # img = np.asarray(Image.open(os.path.join(image_dir, question['image'])).convert('RGB'))
                 img = imread(os.path.join(image_dir, image_path), mode="RGB")  # (448,448,3)
-                img = imresize(img, (224, 224))  # (224,224,3)
+                #img = imresize(img, (224, 224))
+                img = numpy.array(Image.fromarray(img).resize((224, 224)))# (224,224,3)
 
                 img = img.transpose(2, 0, 1)  # TODO: change back switch dimension
                 assert img.shape == (3, 224, 224)  # TODO: change magic number
@@ -150,6 +151,7 @@ def process_question(root, split, word_dic=None, answer_dic=None, question_subdi
 
 if __name__ == '__main__':
     root = sys.argv[1]
+    print(sys.argv[2])
     save_image_to_HDF5 = bool(ast.literal_eval(sys.argv[2]))
     print("save_image_to_HDF5", save_image_to_HDF5)
     word_dic, answer_dic = process_question(root, 'train',

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import pickle
 
@@ -78,12 +79,13 @@ category = {'0': 'count',
 class DVQA(Dataset):
     def __init__(self, root, split='train', transform=None,
                  reverse_question=False, use_preprocessed=False, load_image=True,
-                 hdf5_image_dir="data/images/", load_from_hdf5=True):
+                 hdf5_image_dir="data/", load_from_hdf5=True):
         with open(f'data/{split}.pkl', 'rb') as f:
             self.data = pickle.load(f)
 
         with open('data/dic.pkl', 'rb') as f:
             self.dic = pickle.load(f)
+        #SANDY: Add placeholder for dynamic encoding (index 0-29 reserved for DEM)
         self.answer_class = {v: k for k, v in self.dic['answer_dic'].items()}  # answer i2a
         self.word_class = {v: k for k, v in self.dic['word_dic'].items()}  # word i2w
         self.OOV_index = 0

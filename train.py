@@ -17,6 +17,10 @@ from dataset import DVQA, collate_data, transform
 import time
 import os
 
+sys.path.append('/workspace/st_vqa_entitygrid/solution/')
+from dvqa import enlarge_batch_tensor
+
+
 # if torch.__version__ == '1.1.0':
 #     from torchvision.models.resnet import resnet101 as _resnet101
 # else:
@@ -38,7 +42,7 @@ weight_decay = 1e-4
 n_epoch = 5
 reverse_question = False
 batch_size = (64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
-n_workers = 0  # 4
+n_workers = 4 #0  # 4
 clip_norm = 50
 load_image = False
 
@@ -352,7 +356,9 @@ class SANVQA(nn.Module):
         resnet = torchvision.models.resnet101(
             pretrained=True)  # 051019, batch_size changed to 32 from 64. ResNet 152 to Resnet 101.
         # pretrained ImageNet ResNet-101, use the output of final convolutional layer after pooling
-        modules = list(resnet.children())[:-2]
+
+
+        modules = list(resnet.children())[:-2]#[:-2]
         # modules = list(resnet.children())[:-1]  # including AvgPool2d, 051019 afternoon by Xin
 
         self.resnet = nn.Sequential(*modules)
@@ -371,7 +377,46 @@ class SANVQA(nn.Module):
         self.fine_tune()  # define which parameter sets are to be fine-tuned
         self.hop = 1
 
-    def forward(self, image, question, question_len):  # this is an image blind example (as in section 4.1)
+        act_f = nn.ReLU()
+
+        #Chargrid: Network before concat with image (224/112/56/28/14)
+        self.chargrid_net = nn.Sequential(
+                nn.Conv2d(45, 10, kernel_size=1, stride=1, padding=0),
+                nn.BatchNorm2d(10),
+                act_f,
+                nn.Conv2d(10, 128, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(128),
+                act_f,
+                nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(256),
+                act_f,
+                nn.Conv2d(256, 512, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(512),
+                act_f,
+                nn.Conv2d(512, 1024, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(1024),
+                act_f
+            )
+
+        self.entitygrid_net = nn.Sequential(
+                nn.Conv2d(3072, 2048, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(2048),
+                act_f,
+                nn.Conv2d(2048, 1024, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(1024),
+                act_f,
+                nn.Conv2d(1024, 2048, kernel_size=3, stride=2, padding=1),
+                nn.BatchNorm2d(2048),
+                act_f,
+                nn.Conv2d(2048, 2048, kernel_size=3, stride=1, padding=1),
+                nn.BatchNorm2d(2048),
+                act_f
+            )
+
+
+
+
+    def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
         conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
 
         # normalize by feature map, why need it and why not??
@@ -381,6 +426,13 @@ class SANVQA(nn.Module):
         # final_out = self.mlp(
         #     conv_out.reshape(conv_out.size(0), -1))  # (batch_size , 2048*14*14) -> (batch_size, n_class)
         # conv_out = conv_out.view(conv_out.size(0), -1).contiguous()
+
+        #Chargrid: Enlarge Img Vector
+        conv_out = enlarge_batch_tensor(conv_out)
+        chargrid = self.chargrid_net(chargrid)
+
+        conv_out = torch.cat([conv_out,chargrid],dim=1)
+        conv_out = self.entitygrid_net(conv_out)
 
         embed = self.embed(question)
         embed_pack = nn.utils.rnn.pack_padded_sequence(
@@ -663,26 +715,38 @@ def train(epoch, load_image=True, model_name=None):
 
     print(device)
     print(next(model.parameters()).is_cuda, "next(model.parameters()).is_cuda")
-    for i, (image, question, q_len, answer, question_class) in enumerate(pbar):
+    #Chargrid load labels,bboxes
+    for i, (image, question, q_len, answer, question_class, labels, bboxes, n_label) in enumerate(pbar):
         # end = time.time()
         # print("start another round of data", end - start)
         # start = time.time()
         # input(image.shape)
-        image, question, q_len, answer = (
+
+        image, question, q_len, answer,labels,bboxes,n_label = (
             image.to(device),
             question.to(device),
             torch.tensor(q_len),
             answer.to(device),
+            labels.to(device),
+            bboxes,#bboxes.to(device),
+            n_label
         )
-        # print(image.shape)
-        # print(question.shape)
 
-        # end = time.time()
-        # print("finished to(device)", end - start)
-        # start = time.time()
+        #Chargrid: Creation
+        batch_size = labels.shape[0]
+        n_channel = labels.shape[-1]
+        chargrid = torch.zeros((batch_size,224,224,n_channel),device=torch.get_device(labels))
+        #create chargrid on the fly
+        #start = time.time()
+        for batch_id in range(batch_size):
+            for label_id in range(n_label[batch_id].item()):
+                x,y,x2,y2 = bboxes[batch_id,label_id,:]
+                chargrid[batch_id,y:y2,x:x2,:] = labels[batch_id,label_id]
+        #print(f"chargrid: {time.time()-start:.4f}",)
+        chargrid = chargrid.permute(0,3,1,2)
 
         model.zero_grad()
-        output = model(image, question, q_len)
+        output = model(image, question, q_len, chargrid)
 
         #SANDY: add the OCR tokens at the beginning of the question
         loss = criterion(output, answer)
@@ -716,7 +780,7 @@ def train(epoch, load_image=True, model_name=None):
                 optimizer.param_groups[0]['lr'],  # 0.00  for YES model
             )
         )
-        if (("IMG" in model_name) or ("SAN" in model_name)) and i % 10000 == 0 and i != 0:
+        if (("IMG" in model_name) or ("SAN" in model_name)) and i % 10000 == 0:# and i != 0:
             # valid(epoch + float(i * batch_size / 2325316), model_name=model_name, val_split="val_easy",
             #       load_image=load_image)
             valid(epoch + float(i * batch_size / 2325316), valid_set_easy, model_name=model_name,
@@ -754,14 +818,29 @@ def valid(epoch, valid_set, load_image=True, model_name=None, val_split="val_eas
     class_total = Counter()
 
     with torch.no_grad():
-        for i, (image, question, q_len, answer, answer_class) in enumerate(tqdm(dataset)):
-            image, question, q_len = (
+        for i, (image, question, q_len, answer, answer_class, labels, bboxes, n_label) in enumerate(tqdm(dataset)):
+            image, question, q_len, labels, bboxes, n_label = (
                 image.to(device),
                 question.to(device),
                 torch.tensor(q_len),
+                labels.to(device),
+                bboxes,#bboxes.to(device),
+                n_label
             )
 
-            output = model(image, question, q_len)
+            batch_size = labels.shape[0]
+            n_channel = labels.shape[-1]
+            chargrid = torch.zeros((batch_size,224,224,n_channel),device=torch.get_device(labels))
+
+            #Chargrid Creation 
+            for batch_id in range(batch_size):
+                for label_id in range(n_label[batch_id].item()):
+                    x,y,x2,y2 = bboxes[batch_id,label_id,:]
+                    chargrid[batch_id,y:y2,x:x2,:] = labels[batch_id,label_id]
+            
+            chargrid = chargrid.permute(0,3,1,2)
+
+            output = model(image, question, q_len, chargrid)
             correct = output.data.cpu().numpy().argmax(1) == answer.numpy()
             for c, class_ in zip(correct, answer_class):
                 if c:  # if correct

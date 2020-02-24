@@ -10,6 +10,13 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
+import sys
+import json
+sys.path.append('/workspace/st_vqa_entitygrid/solution/')
+from dvqa import get_labels_and_bboxes
+from figureqa import load_vectorizer
+
+
 resize = transforms.Resize([128, 128])
 
 transform = transforms.Compose([
@@ -106,6 +113,12 @@ class DVQA(Dataset):
         else:
             print("either not self.load_image or not self.load_from_hdf5")
 
+        #Chargrid: load image_id2metadata.json
+        self.id2metadata = json.load(open(f"data/{split}_id2metadata.json","r"))
+
+        #Chargrid: load vectorizer
+        self.vectorizer = load_vectorizer("data/dvqa_bag_of_characters.pkl")
+
     def __getitem__(self, index):
         hdf5_idx_for_this_image, imgfile, question, answer, question_type = self.data[
             index]  # question['image'], question_token, answer, question['template_id'],  # question/answer class
@@ -172,7 +185,26 @@ class DVQA(Dataset):
         if self.reverse_question:  # TODO: test this variant for QUES model
             question = question[::-1]
 
-        return img, question, len(question), answer, question_class  # answer_class
+        #Chargrid: get labels/bboxes and vectorize
+        metadata = self.id2metadata[imgfile]
+        labels,bboxes = get_labels_and_bboxes(metadata)
+        torch_bboxes = torch.tensor(bboxes)
+        
+        emb_labels = self.vectorizer.transform(labels).toarray()
+        #normalized chargrid
+        label_sum = np.sum(emb_labels,1)
+        torch_labels = torch.tensor(emb_labels / label_sum[:, np.newaxis])
+        
+        n_label,n_dim = emb_labels.shape
+
+        #max number of labels/bboxes = 25
+        #tensor_labels = torch.zeros((25,n_dim))
+        #tensor_labels[:n_label] = torch.tensor(emb_labels)
+
+        #tensor_bboxes = torch.zeros((25,4))
+        #tensor_bboxes[:n_label] = torch.tensor(bboxes)
+
+        return img, question, len(question), answer, question_class, torch_labels, torch_bboxes, n_label  # answer_class
 
     def __len__(self):
         return len(self.data)
@@ -181,14 +213,23 @@ class DVQA(Dataset):
 def collate_data(batch):
     images, lengths, answers, question_class = [], [], [], []
     batch_size = len(batch)
+    max_labels = max([entry[7] for entry in batch])
+    max_label_dim = batch[0][5].shape[-1]
+
+    batch_labels = torch.zeros((batch_size,max_labels,max_label_dim))
+    batch_bboxes = np.zeros((batch_size,max_labels,4),int)#torch.zeros((batch_size,max_labels,4))
+    batch_n_labels = torch.zeros((batch_size),dtype=torch.int32)
+
+    
 
     max_len = max(map(lambda x: len(x[1]), batch))
 
     questions = np.zeros((batch_size, max_len), dtype=np.int64)
-    sort_by_len = sorted(batch, key=lambda x: len(x[1]), reverse=True)
+    sort_by_len = sorted(batch, key=lambda x: len(x[1]), reverse=True) 
 
     for i, b in enumerate(sort_by_len):
-        image, question, length, answer, class_ = b  # destructure a batch's data
+        #Chargrid: collate labels/bboxes 
+        image, question, length, answer, class_, labels, bboxes, n_label = b  # destructure a batch's data
         images.append(image)
         length = len(question)
         questions[i, :length] = question
@@ -196,5 +237,13 @@ def collate_data(batch):
         answers.append(answer)
         question_class.append(class_)
 
+        batch_labels[i,:n_label,:] = labels
+        batch_bboxes[i,:n_label,:] = bboxes
+        batch_n_labels[i] = n_label
+
+        
+
+
     return torch.stack(images), torch.from_numpy(questions), \
-           lengths, torch.LongTensor(answers), question_class
+           lengths, torch.LongTensor(answers), question_class, \
+           batch_labels, batch_bboxes, batch_n_labels

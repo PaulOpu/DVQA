@@ -17,7 +17,8 @@ from dataset import DVQA, collate_data, transform
 import time
 import os
 
-sys.path.append('/workspace/st_vqa_entitygrid/solution/')
+#sys.path.append('/workspace/st_vqa_entitygrid/solution/')
+sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
 from dvqa import enlarge_batch_tensor
 
 
@@ -42,7 +43,7 @@ weight_decay = 1e-4
 n_epoch = 5
 reverse_question = False
 batch_size = (64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
-n_workers = 4 #0  # 4
+n_workers = 0 #0  # 4
 clip_norm = 50
 load_image = False
 
@@ -399,7 +400,10 @@ class SANVQA(nn.Module):
             )
 
         self.entitygrid_net = nn.Sequential(
-                nn.Conv2d(3072, 2048, kernel_size=3, stride=1, padding=1),
+                #nn.Conv2d(3072, 2048, kernel_size=3, stride=1, padding=1),
+                #nn.BatchNorm2d(2048),
+                #act_f,
+                nn.Conv2d(3072, 2048, kernel_size=1, stride=1, padding=0),
                 nn.BatchNorm2d(2048),
                 act_f,
                 nn.Conv2d(2048, 1024, kernel_size=3, stride=1, padding=1),
@@ -867,7 +871,8 @@ def valid(epoch, valid_set, load_image=True, model_name=None, val_split="val_eas
 
 
 if __name__ == '__main__':
-    with open('data/dic.pkl', 'rb') as f:
+    data_path = sys.argv[1]
+    with open(os.path.join(data_path,'dic.pkl'), 'rb') as f:
         dic = pickle.load(f)
 
     n_words = len(dic['word_dic']) + 1

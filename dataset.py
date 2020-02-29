@@ -12,7 +12,8 @@ from torchvision import transforms
 
 import sys
 import json
-sys.path.append('/workspace/st_vqa_entitygrid/solution/')
+#sys.path.append('/workspace/st_vqa_entitygrid/solution/')
+sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
 from dvqa import get_labels_and_bboxes
 from figureqa import load_vectorizer
 
@@ -87,10 +88,10 @@ class DVQA(Dataset):
     def __init__(self, root, split='train', transform=None,
                  reverse_question=False, use_preprocessed=False, load_image=True,
                  hdf5_image_dir="data/", load_from_hdf5=True):
-        with open(f'data/{split}.pkl', 'rb') as f:
+        with open(os.path.join(root,split+'.pkl'), 'rb') as f:
             self.data = pickle.load(f)
 
-        with open('data/dic.pkl', 'rb') as f:
+        with open(os.path.join(root,'dic.pkl'), 'rb') as f:
             self.dic = pickle.load(f)
         #SANDY: Add placeholder for dynamic encoding (index 0-29 reserved for DEM)
         self.answer_class = {v: k for k, v in self.dic['answer_dic'].items()}  # answer i2a
@@ -108,16 +109,16 @@ class DVQA(Dataset):
 
         if self.load_image and self.load_from_hdf5:
             print("Loading from hdf5")
-            self.h = h5py.File(os.path.join(hdf5_image_dir, self.split + '_IMAGES_.hdf5'), 'r')
+            self.h = h5py.File(os.path.join(root, self.split + '_IMAGES_.hdf5'), 'r')
             self.imgs = self.h['images']
         else:
             print("either not self.load_image or not self.load_from_hdf5")
 
         #Chargrid: load image_id2metadata.json
-        self.id2metadata = json.load(open(f"data/{split}_id2metadata.json","r"))
+        self.id2metadata = json.load(open(os.path.join(root, f"{split}_id2metadata.json"),"r"))
 
         #Chargrid: load vectorizer
-        self.vectorizer = load_vectorizer("data/dvqa_bag_of_characters.pkl")
+        self.vectorizer = load_vectorizer(os.path.join(root,"dvqa_bag_of_characters.pkl"))
 
     def __getitem__(self, index):
         hdf5_idx_for_this_image, imgfile, question, answer, question_type = self.data[

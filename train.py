@@ -19,6 +19,8 @@ import os
 
 sys.path.append('/workspace/st_vqa_entitygrid/solution/')
 from dvqa import enlarge_batch_tensor
+from visualize import TensorBoardVisualize
+
 
 
 # if torch.__version__ == '1.1.0':
@@ -41,194 +43,13 @@ lr_gamma = 2  # gamma (float) – Multiplicative factor of learning rate decay. 
 weight_decay = 1e-4
 n_epoch = 5
 reverse_question = False
-batch_size = (64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
-n_workers = 4 #0  # 4
+#batch_size = (64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
+batch_size = 45
+n_workers = 4  # 4
 clip_norm = 50
 load_image = False
 
 
-class YES(nn.Module):
-    def __init__(
-            self,
-            n_class, yes_class_idx,
-
-    ):
-        super(YES, self).__init__()
-        self.n_class = n_class
-        self.yes_class_idx = yes_class_idx
-        self.f = nn.Sequential(
-            nn.Linear(10, 3),
-        )
-
-    def forward(self, image, question, question_len):
-        result = np.zeros([image.shape[0], self.n_class])
-        result[:, self.yes_class_idx] = 1
-        return torch.Tensor(result)
-
-
-class IMG(nn.Module):
-    def __init__(
-            self,
-            n_class, encoded_image_size=7, conv_output_size=2048, mlp_hidden_size=1024, dropout_rate=0.5
-
-    ):  # TODO: change back?  encoded_image_size=7 because in the hdf5 image file,
-        # we save image as 3,244,244 -> after resnet152, becomes 2048*7*7
-        super(IMG, self).__init__()
-        self.n_class = n_class
-
-        self.enc_image_size = encoded_image_size
-        # resnet = torchvision.models.resnet101(
-        #     pretrained=True)  # 051019, batch_size changed to 32 from 64. ResNet 152 to Resnet 101.
-        resnet = _resnet101(pretrained=True)
-        # pretrained ImageNet ResNet-101, use the output of final convolutional layer after pooling
-        modules = list(resnet.children())[:-2]
-        # modules = list(resnet.children())[:-1]  # including AvgPool2d, 051019 afternoon by Xin
-
-        self.resnet = nn.Sequential(*modules)
-        self.dropout = nn.Dropout(
-            p=dropout_rate)  # insert Dropout layers after convolutional layers that you’re going to fine-tune
-
-        self.mlp = nn.Sequential(
-            self.dropout,
-            nn.Linear(conv_output_size * encoded_image_size * encoded_image_size, mlp_hidden_size),
-            nn.ReLU(),
-            self.dropout,
-            nn.Linear(mlp_hidden_size, self.n_class))
-
-        # self.mlp = nn.Sequential(self.dropout,
-        #                          nn.Linear(conv_output_size, mlp_hidden_size),
-        #                          nn.ReLU(),
-        #                          self.dropout,
-        #                          nn.Linear(mlp_hidden_size, self.n_class))  # including AvgPool2d, 051019 afternoon by Xin
-
-        self.fine_tune()  # define which parameter sets are to be fine-tuned
-
-    def forward(self, image, question, question_len):  # this is an image blind example (as in section 4.1)
-        conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
-        # final_out = self.mlp(
-        #     conv_out.reshape(conv_out.size(0), -1))  # (batch_size , 2048*14*14) -> (batch_size, n_class)
-        final_out = self.mlp(conv_out.view(conv_out.size(0), -1).contiguous())
-
-        return final_out
-
-    def fine_tune(self, fine_tune=True):
-        """
-        Allow or prevent the computation of gradients for convolutional blocks 2 through 4 of the encoder.
-
-        :param fine_tune: Allow?
-        """
-        if (not fine_tune):
-            for p in self.resnet.parameters():
-                p.requires_grad = False
-        if (not load_from_hdf5):
-            for p in self.resnet.parameters():
-                p.requires_grad = False
-            # for c in list(self.resnet.children())[6:]:
-            #     for p in c.parameters():
-            #         p.requires_grad = fine_tune
-        else:
-            # If fine-tuning, only fine-tune convolutional blocks 2 through 4.
-            # Before that not-fine-tuned are block 1 and preliminary blocks.
-            # >>> print(len(list(resnet.children()))) >>> 10 -> we only utilize up to the 8th block.
-            for c in list(self.resnet.children())[5:]:
-                for p in c.parameters():
-                    p.requires_grad = fine_tune
-
-        for p in self.mlp.parameters():
-            p.requires_grad = True
-
-        # # If fine-tuning, only fine-tune convolutional blocks 2 through 4
-        # for c in list(self.resnet.children())[5:]:
-        #     for p in c.parameters():
-        #         p.requires_grad = fine_tune
-
-
-class IMGQUES(nn.Module):
-    def __init__(
-            self,
-            n_class, n_vocab, embed_hidden=300, lstm_hidden=1024, encoded_image_size=7, conv_output_size=2048,
-            mlp_hidden_size=1024, dropout_rate=0.5
-
-    ):  # TODO: change back?  encoded_image_size=7 because in the hdf5 image file,
-        # we save image as 3,244,244 -> after resnet152, becomes 2048*7*7
-        super(IMGQUES, self).__init__()
-        self.n_class = n_class
-        self.embed = nn.Embedding(n_vocab, embed_hidden)
-        self.lstm = nn.LSTM(embed_hidden, lstm_hidden, batch_first=True)
-
-        self.enc_image_size = encoded_image_size
-        resnet = torchvision.models.resnet101(
-            pretrained=True)  # 051019, batch_size changed to 32 from 64. ResNet 152 to Resnet 101.
-        # pretrained ImageNet ResNet-101, use the output of final convolutional layer after pooling
-        modules = list(resnet.children())[:-2]
-        # modules = list(resnet.children())[:-1]  # including AvgPool2d, 051019 afternoon by Xin
-
-        self.resnet = nn.Sequential(*modules)
-        self.dropout = nn.Dropout(
-            p=dropout_rate)  # insert Dropout layers after convolutional layers that you’re going to fine-tune
-
-        self.mlp = nn.Sequential(self.dropout,  ## TODO: shall we eliminate this??
-                                 nn.Linear(conv_output_size * encoded_image_size * encoded_image_size + lstm_hidden,
-                                           mlp_hidden_size),
-                                 nn.ReLU(),
-                                 self.dropout,
-                                 nn.Linear(mlp_hidden_size, self.n_class))
-
-        self.fine_tune()  # define which parameter sets are to be fine-tuned
-
-    def forward(self, image, question, question_len):  # this is an image blind example (as in section 4.1)
-        conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
-        # final_out = self.mlp(
-        #     conv_out.reshape(conv_out.size(0), -1))  # (batch_size , 2048*14*14) -> (batch_size, n_class)
-        conv_out = conv_out.view(conv_out.size(0), -1).contiguous()
-
-        embed = self.embed(question)
-        embed_pack = nn.utils.rnn.pack_padded_sequence(
-            embed, question_len, batch_first=True
-        )
-        # print(embed_pack)
-        output, (h, c) = self.lstm(embed_pack)
-
-        output, _ = torch.nn.utils.rnn.pad_packed_sequence(
-            output, batch_first=True)
-
-        idx = (torch.LongTensor(question_len) - 1).view(-1, 1).expand(
-            len(question_len), output.size(2))
-        time_dimension = 1  # if batch_first else 0
-        idx = idx.unsqueeze(time_dimension).to(device)
-
-        last_output = output.gather(
-            time_dimension, idx).squeeze(time_dimension)
-
-        conv_lstm_feature = torch.cat((conv_out, last_output), 1)
-
-        return self.mlp(conv_lstm_feature)
-
-    def fine_tune(self, fine_tune=True):
-        """
-        Allow or prevent the computation of gradients for convolutional blocks 2 through 4 of the encoder.
-
-        :param fine_tune: Allow?
-        """
-        if (not fine_tune):
-            for p in self.resnet.parameters():
-                p.requires_grad = False
-        if (not load_from_hdf5):
-            for p in self.resnet.parameters():
-                p.requires_grad = False
-            # for c in list(self.resnet.children())[6:]:
-            #     for p in c.parameters():
-            #         p.requires_grad = fine_tune
-        else:
-            # If fine-tuning, only fine-tune convolutional blocks 2 through 4.
-            # Before that not-fine-tuned are block 1 and preliminary blocks.
-            # >>> print(len(list(resnet.children()))) >>> 10 -> we only utilize up to the 8th block.
-            for c in list(self.resnet.children())[5:]:
-                for p in c.parameters():
-                    p.requires_grad = fine_tune
-
-        for p in self.mlp.parameters():
-            p.requires_grad = True
 
 
 class Attention(nn.Module):  # SANVQAbeta
@@ -248,57 +69,6 @@ class Attention(nn.Module):  # SANVQAbeta
         x = self.relu(v + q)
         x = self.x_conv(self.drop(x))
         return x
-
-
-# class Attention(nn.Module):  # SANVQAtri
-#     def __init__(self, v_features, q_features, mid_features, glimpses, drop=0.5):
-#         super(Attention, self).__init__()
-#
-#         # self.v_conv = nn.Conv2d(v_features, mid_features, 1)  # let self.lin take care of bias
-#         # self.q_lin = nn.Linear(q_features, mid_features)
-#         # self.x_conv = nn.Conv2d(mid_features, glimpses, 1)
-#         #
-#         # self.drop = nn.Dropout(drop)
-#         # self.relu = nn.ReLU(inplace=True)
-#
-#         self.w_i_a = nn.mlp
-#
-#     def forward(self, v, q):
-#         v = v.view(v.size(0), v.size(1), -1).contiguous().permute(0,2,1)
-#
-#         v = self.v_conv(self.drop(v))
-#         q = self.q_lin(self.drop(q))
-#         q = tile_2d_over_nd(q, v)
-#         x = self.relu(v + q)
-#         x = self.x_conv(self.drop(x))
-#         return x
-
-# def __init__(self, v_features, q_features, mid_features, glimpses, drop=0.0):
-#     super(Attention, self).__init__()
-#
-#     # self.v_conv = nn.Conv2d(v_features, mid_features, 1, bias=False)  # let self.lin take care of bias
-#     # self.q_lin = nn.Linear(q_features, mid_features)
-#
-#     self.v_q_conv_1 = nn.Conv2d(v_features + q_features, mid_features, 1, bias=False)
-#     self.v_q_conv_2 = nn.Conv2d(mid_features, glimpses, 1)
-#     self.drop = nn.Dropout(drop)
-#     self.relu = nn.ReLU(inplace=True)
-#
-# def forward(self, v, q):
-#     tiled_lstm_final_output = tile_2d_over_nd(q, v)
-#
-#     concat_v_q = torch.cat((tiled_lstm_final_output, v), dim=1)
-#     attention_mid = self.relu(self.v_q_conv_1(concat_v_q))
-#     attention_final = self.relu(self.v_q_conv_2(attention_mid))
-#     return attention_final
-
-# v = self.v_conv(self.drop(v))
-# q = self.q_lin(self.drop(q))
-# q = tile_2d_over_nd(q, v)
-# x = self.relu(v + q)
-# x = self.x_conv(self.drop(x))
-# return x
-
 
 def apply_attention(input, attention):  # softmax weight, then weighted average
     """ Apply any number of attention maps over the input. """
@@ -353,14 +123,18 @@ class SANVQA(nn.Module):
         self.enc_image_size = encoded_image_size
         # resnet = torchvision.models.resnet152(
         #     pretrained=True)
+
+        
         resnet = torchvision.models.resnet101(
             pretrained=True)  # 051019, batch_size changed to 32 from 64. ResNet 152 to Resnet 101.
         # pretrained ImageNet ResNet-101, use the output of final convolutional layer after pooling
 
-
-        modules = list(resnet.children())[:-2]#[:-2]
+        #Chargrid: Early Concat
+        #modules = list(resnet.children())[:-2]
+        modules = list(resnet.children())[:5]
         # modules = list(resnet.children())[:-1]  # including AvgPool2d, 051019 afternoon by Xin
 
+        #self.resnet = nn.Sequential(*modules)
         self.resnet = nn.Sequential(*modules)
         self.dropout = nn.Dropout(
             p=dropout_rate)  # insert Dropout layers after convolutional layers that you’re going to fine-tune
@@ -379,8 +153,36 @@ class SANVQA(nn.Module):
 
         act_f = nn.ReLU()
 
+        #Chargrid: Early Concat
+        untrained_resnet = torchvision.models.resnet101(
+            pretrained=False)
+
+        chargrid_modules = list(untrained_resnet.children())[:5]
+        #replace first module to fit dimensions
+        chargrid_modules[0:1] = [
+            nn.Conv2d(45, 10, kernel_size=1, stride=1, padding=0),
+            nn.BatchNorm2d(10),
+            act_f,
+            nn.Conv2d(10, 64, kernel_size=7, stride=2, padding=3)]
+
+        self.chargrid_net = nn.Sequential(*chargrid_modules)
+
+        #After Concat
+
+        entitygrid_modules = list(untrained_resnet.children())[5:-2]
+        #concatentation doubles the number of channels (256->512)
+        entitygrid_modules[0][0].conv1 = nn.Conv2d(
+            512, 128, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        
+        entitygrid_modules[0][0].downsample[0] = nn.Conv2d(
+            512, 512, kernel_size=(1, 1), stride=(2, 2), bias=False)
+
+        self.entitygrid_net = nn.Sequential(*entitygrid_modules)
+        
+
+
         #Chargrid: Network before concat with image (224/112/56/28/14)
-        self.chargrid_net = nn.Sequential(
+        """ self.chargrid_net = nn.Sequential(
                 nn.Conv2d(45, 10, kernel_size=1, stride=1, padding=0),
                 nn.BatchNorm2d(10),
                 act_f,
@@ -411,13 +213,14 @@ class SANVQA(nn.Module):
                 nn.Conv2d(2048, 2048, kernel_size=3, stride=1, padding=1),
                 nn.BatchNorm2d(2048),
                 act_f
-            )
+            ) """
 
 
 
 
     def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
-        conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
+        #conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
+        conv_out = self.resnet(image)
 
         # normalize by feature map, why need it and why not??
         # conv_out = conv_out / (conv_out.norm(p=2, dim=1, keepdim=True).expand_as(
@@ -428,7 +231,7 @@ class SANVQA(nn.Module):
         # conv_out = conv_out.view(conv_out.size(0), -1).contiguous()
 
         #Chargrid: Enlarge Img Vector
-        conv_out = enlarge_batch_tensor(conv_out)
+        #conv_out = enlarge_batch_tensor(conv_out)
         chargrid = self.chargrid_net(chargrid)
 
         conv_out = torch.cat([conv_out,chargrid],dim=1)
@@ -491,237 +294,27 @@ class SANVQA(nn.Module):
             p.requires_grad = True
 
 
-class QUES(nn.Module):
 
-    def __init__(
-            self, n_class, n_vocab, embed_hidden=300, lstm_hidden=1024, dropout_rate=0.5, mlp_hidden_size=1024):
-        super(QUES, self).__init__()
-        self.n_class = n_class
-        self.embed = nn.Embedding(n_vocab, embed_hidden)
-        self.lstm = nn.LSTM(embed_hidden, lstm_hidden, batch_first=True)
-
-        # self.resnet = nn.Sequential(*modules)
-        self.dropout = nn.Dropout(
-            p=dropout_rate)  # insert Dropout layers after convolutional layers that you’re going to fine-tune
-
-        self.mlp = nn.Sequential(self.dropout,  ## TODO: shall we eliminate this??
-                                 nn.Linear(lstm_hidden, mlp_hidden_size),
-                                 nn.ReLU(),
-                                 self.dropout,
-                                 nn.Linear(mlp_hidden_size, self.n_class))
-
-        # self.fine_tune()  # define which parameter sets are to be fine-tuned
-
-    def forward(self, image, question, question_len):
-        #  https://blog.nelsonliu.me/2018/01/24/extracting-last-timestep-outputs-from-pytorch-rnns/
-
-        embed = self.embed(question)
-        embed_pack = nn.utils.rnn.pack_padded_sequence(
-            embed, question_len, batch_first=True
-        )
-        # print(embed_pack)
-        output, (h, c) = self.lstm(embed_pack)
-        # h_tile = h.permute(1, 0, 2).expand(
-        #     batch_size, n_pair * n_pair, self.lstm_hidden
-        # )
-
-        # _, (h, c) = self.lstm(question)
-
-        # input(h.shape)
-        # out = self.mlp(h.squeeze(0))
-
-        # Extract the outputs for the last timestep of each example
-
-        output, _ = torch.nn.utils.rnn.pad_packed_sequence(
-            output, batch_first=True)
-
-        idx = (torch.LongTensor(question_len) - 1).view(-1, 1).expand(
-            len(question_len), output.size(2))
-        time_dimension = 1  # if batch_first else 0
-        idx = idx.unsqueeze(time_dimension).to(device)
-        # if output.is_cuda:
-        #     idx = idx.cuda(output.data.get_device())
-        # Shape: (batch_size, rnn_hidden_dim)
-        last_output = output.gather(
-            time_dimension, idx).squeeze(time_dimension)
-        # input(last_output.shape)
-        return self.mlp(last_output)
-
-        # emb_len = np.array(question_len)
-        # sorted_idx = np.argsort(-emb_len)
-        # embed = embed[sorted_idx]
-        # emb_len = emb_len[sorted_idx]
-        # unsorted_idx = np.argsort(sorted_idx)
-        #
-        # packed_emb = torch.nn.utils.rnn.pack_padded_sequence(embed, emb_len, batch_first=True)
-        # output, hn = self.rnn(packed_emb)
-        # unpacked, unpacked_len = torch.nn.utils.rnn.pad_packed_sequence(output)
-        # unpacked = unpacked.transpose(0, 1)
-        # unpacked = unpacked[torch.LongTensor(unsorted_idx)]
-        # return unpacked
-        #
-        #
-        # return out
-
-
-class SANDY(nn.Module):
-    '''
-    Implementation of SANDY based on the SANVQA model
-
-    '''
-
-    def __init__(
-            self,
-            n_class, n_vocab, embed_hidden=300, lstm_hidden=1024, encoded_image_size=7, conv_output_size=2048,
-            mlp_hidden_size=1024, dropout_rate=0.5, glimpses=2
-
-    ):  # TODO: change back?  encoded_image_size=7 because in the hdf5 image file,
-        # we save image as 3,244,244 -> after resnet152, becomes 2048*7*7
-        super(SANDY, self).__init__()
-        #SANDY: add 30 for the n_class
-        self.n_class = n_class + 30
-        #SANDY: add 30 to the n_vocab
-        self.embed = nn.Embedding(n_vocab + 30, embed_hidden)
-        self.lstm = nn.LSTM(embed_hidden, lstm_hidden, batch_first=True)
-
-        self.enc_image_size = encoded_image_size
-        # resnet = torchvision.models.resnet152(
-        #     pretrained=True)
-        resnet = torchvision.models.resnet101(
-            pretrained=True)  # 051019, batch_size changed to 32 from 64. ResNet 152 to Resnet 101.
-        # pretrained ImageNet ResNet-101, use the output of final convolutional layer after pooling
-        modules = list(resnet.children())[:-2]
-        # modules = list(resnet.children())[:-1]  # including AvgPool2d, 051019 afternoon by Xin
-
-        self.resnet = nn.Sequential(*modules)
-        self.dropout = nn.Dropout(
-            p=dropout_rate)  # insert Dropout layers after convolutional layers that you’re going to fine-tune
-
-        self.attention = Attention(conv_output_size, lstm_hidden, mid_features=512, glimpses=glimpses, drop=0.5)
-
-        self.mlp = nn.Sequential(self.dropout,  ## TODO: shall we eliminate this??
-                                 nn.Linear(conv_output_size * glimpses + lstm_hidden,
-                                           mlp_hidden_size),
-                                 nn.ReLU(),
-                                 self.dropout,
-                                 nn.Linear(mlp_hidden_size, self.n_class))
-
-        self.fine_tune()  # define which parameter sets are to be fine-tuned
-        self.hop = 1
-
-    def forward(self, image, question, question_len):  # this is an image blind example (as in section 4.1)
-        conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
-
-        # normalize by feature map, why need it and why not??
-        # conv_out = conv_out / (conv_out.norm(p=2, dim=1, keepdim=True).expand_as(
-        #     conv_out) + 1e-8)  # Section 3.1 of show, ask, attend, tell
-
-        # final_out = self.mlp(
-        #     conv_out.reshape(conv_out.size(0), -1))  # (batch_size , 2048*14*14) -> (batch_size, n_class)
-        # conv_out = conv_out.view(conv_out.size(0), -1).contiguous()
-
-        embed = self.embed(question)
-        embed_pack = nn.utils.rnn.pack_padded_sequence(
-            embed, question_len, batch_first=True
-        )
-        lstm_output, (h, c) = self.lstm(embed_pack)
-
-        # pad packed sequence to get last timestamp of lstm hidden
-        lstm_output, _ = torch.nn.utils.rnn.pad_packed_sequence(
-            lstm_output, batch_first=True)
-
-        idx = (torch.LongTensor(question_len) - 1).view(-1, 1).expand(
-            len(question_len), lstm_output.size(2))
-        time_dimension = 1  # if batch_first else 0
-        idx = idx.unsqueeze(time_dimension).to(device)
-
-        lstm_final_output = lstm_output.gather(
-            time_dimension, idx).squeeze(time_dimension)
-
-        attention = self.attention(conv_out, lstm_final_output)
-        weighted_conv_out = apply_attention(conv_out,
-                                            attention)  # (n, glimpses * channel) ## Or should be (n, glimpses * channel, H, W)?
-        # augmented_lstm_output = (weighted_conv_out + lstm_final_output)
-        augmented_lstm_output = torch.cat((weighted_conv_out, lstm_final_output), 1)
-
-        if self.hop == 2:
-            raise NotImplementedError
-            # attention = self.attention(conv_out, lstm_final_output)
-            # weighted_conv_out = apply_attention(conv_out, attention)
-            # augmented_lstm_output = (weighted_conv_out + lstm_final_output)
-
-        return self.mlp(augmented_lstm_output)
-
-    def fine_tune(self, fine_tune=True):
-        """
-        Allow or prevent the computation of gradients for convolutional blocks 2 through 4 of the encoder.
-
-        :param fine_tune: Allow?
-        """
-        if (not fine_tune):
-            for p in self.resnet.parameters():
-                p.requires_grad = False
-        if (not load_from_hdf5):
-            for p in self.resnet.parameters():
-                p.requires_grad = False
-        else:
-            for c in list(self.resnet.children())[5:]:
-                for p in c.parameters():
-                    p.requires_grad = fine_tune
-
-        for p in self.mlp.parameters():
-            p.requires_grad = True
-
-        for p in self.attention.parameters():
-            print(p.requires_grad, "p.requires_grad")
-            p.requires_grad = True
-
-
-def train_YES(epoch):  # basically trim over loss calculation and back prop for YES model calculation
-    raise NotImplementedError
-
-
-def valid_YES(epoch, val_split="val_easy",
-              load_image=True):  # basically trimmed version of train() and valid(), except without image_loading and GPU tensor operation
-    raise NotImplementedError
-
-
-def train(epoch, load_image=True, model_name=None):
-    # train_set = DataLoader(
-    #     DVQA(
-    #         sys.argv[1],
-    #         transform=transform,
-    #         reverse_question=reverse_question,
-    #         use_preprocessed=True,
-    #         load_image=load_image,
-    #         load_from_hdf5=load_from_hdf5
-    #
-    #     ),
-    #     batch_size=batch_size,
-    #     num_workers=n_workers,
-    #     shuffle=True,
-    #     collate_fn=collate_data,
-    # )
-
+def train(epoch,tensorboard_client,global_iteration, load_image=True, model_name=None):
+    run_name = "train"
     model.train(True)  # train mode
 
     dataset = iter(train_set)
     pbar = tqdm(dataset)
+    n_batch = len(pbar)
     moving_loss = 0  # it will change when loop over data
-    # print("Using moving_Loss? ", moving_loss == 0)
 
-    # start = time.time()
-    # print("start reading data")
+
+
+    #Train Epoch
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
 
     print(device)
     print(next(model.parameters()).is_cuda, "next(model.parameters()).is_cuda")
     #Chargrid load labels,bboxes
     for i, (image, question, q_len, answer, question_class, labels, bboxes, n_label) in enumerate(pbar):
-        # end = time.time()
-        # print("start another round of data", end - start)
-        # start = time.time()
-        # input(image.shape)
-
+        start.record()
         image, question, q_len, answer,labels,bboxes,n_label = (
             image.to(device),
             question.to(device),
@@ -731,35 +324,48 @@ def train(epoch, load_image=True, model_name=None):
             bboxes,#bboxes.to(device),
             n_label
         )
-
+        #end.record()
+        #torch.cuda.synchronize()
+        #print("Loading: ",start.elapsed_time(end))
+        #start.record()
         #Chargrid: Creation
         batch_size = labels.shape[0]
         n_channel = labels.shape[-1]
-        chargrid = torch.zeros((batch_size,224,224,n_channel),device=torch.get_device(labels))
+        chargrid = torch.zeros((batch_size,n_channel,224,224),device=torch.get_device(labels))
         #create chargrid on the fly
         #start = time.time()
-        for batch_id in range(batch_size):
+        for batch_id in range(labels.shape[0]):
             for label_id in range(n_label[batch_id].item()):
                 x,y,x2,y2 = bboxes[batch_id,label_id,:]
-                chargrid[batch_id,y:y2,x:x2,:] = labels[batch_id,label_id]
+                label_box = labels[batch_id,label_id].repeat((x2-x,y2-y,1)).transpose(2,0)
+                chargrid[batch_id,:,y:y2,x:x2] = label_box
+
+        #end.record()
+        #torch.cuda.synchronize()
+        #print("Chargrid: ",start.elapsed_time(end))
+        #start.record()
+        #for batch_id in range(batch_size):
+        #    for label_id in range(n_label[batch_id].item()):
+        #        x,y,x2,y2 = bboxes[batch_id,label_id,:]
+        #        chargrid[batch_id,y:y2,x:x2,:] = labels[batch_id,label_id]
         #print(f"chargrid: {time.time()-start:.4f}",)
-        chargrid = chargrid.permute(0,3,1,2)
+        #chargrid = chargrid.permute(0,3,1,2)
 
         model.zero_grad()
         output = model(image, question, q_len, chargrid)
-
+        #end.record()
+        #torch.cuda.synchronize()
+        #print("Forward: ",start.elapsed_time(end))
+        #start.record()
         #SANDY: add the OCR tokens at the beginning of the question
         loss = criterion(output, answer)
         loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), clip_norm)
         optimizer.step()
-        # print(output.data.cpu().numpy().argmax(1))
-        # print(answer.data.cpu().numpy())
-
-        # end = time.time()
-        # print("finished loss prop", end - start)
-        # start = time.time()
-
+        #end.record()
+        #torch.cuda.synchronize()
+        #print("Backward: ",start.elapsed_time(end))
+        #start.record()
         correct = output.data.cpu().numpy().argmax(1) == answer.data.cpu().numpy()
         correct = correct.sum() / batch_size
 
@@ -771,29 +377,130 @@ def train(epoch, load_image=True, model_name=None):
             moving_loss = moving_loss * 0.99 + correct * 0.01
             # print("moving_loss = moving_loss * 0.99 + correct * 0.01")
 
-        pbar.set_description(
-            'Epoch: {}; Loss: {:.5f}; Acc: {:.5f}; Correct:{:.5f}; LR: {:.6f}'.format(
-                epoch + 1,
-                loss.detach().item(),  # 0.00 for YES model
-                moving_loss,
-                correct,
-                optimizer.param_groups[0]['lr'],  # 0.00  for YES model
-            )
-        )
-        if (("IMG" in model_name) or ("SAN" in model_name)) and i % 10000 == 0:# and i != 0:
+        #pbar.set_description(
+        #    'Epoch: {}; Loss: {:.5f}; Acc: {:.5f}; Correct:{:.5f}; LR: {:.6f}'.format(
+        #        epoch + 1,
+        #        loss.detach().item(),  # 0.00 for YES model
+        #        moving_loss,
+        #        correct,
+        #        optimizer.param_groups[0]['lr'],  # 0.00  for YES model
+        #    )
+        #)
+        if (("IMG" in model_name) or ("SAN" in model_name)) and i % 10000 == 0 and i != 0:
             # valid(epoch + float(i * batch_size / 2325316), model_name=model_name, val_split="val_easy",
             #       load_image=load_image)
-            valid(epoch + float(i * batch_size / 2325316), valid_set_easy, model_name=model_name,
+            valid(epoch + float(i * batch_size / 2325316),tensorboard_client,global_iteration, valid_set_easy, model_name=model_name,
                   load_image=load_image, val_split="val_easy")
 
             model.train(True)
 
+        #Chargrid: visualize
+        visualize_train(global_iteration,run_name,model,tensorboard_client,loss,moving_loss)
+        #end.record()
+        #torch.cuda.synchronize()
+        #print("Visu: ",start.elapsed_time(end))
+
+        global_iteration += 1
         # end = time.time()
         # print("finished accuracy calculation", end - start)
         # start = time.time()
 
 
-def valid(epoch, valid_set, load_image=True, model_name=None, val_split="val_easy"):
+def visualize_weight_gradient(global_iteration,tensorboard_client,module,weight_name,gradient_name):
+
+    weights = module.weight.data.cpu().numpy()
+    gradients = module.weight.grad.cpu().numpy()
+    tensorboard_client.append_histogram(global_iteration, weights.reshape(-1), weight_name)
+    tensorboard_client.append_histogram(global_iteration, gradients.reshape(-1), gradient_name)
+
+
+def visualize_train(global_iteration,run_name,model,tensorboard_client,loss,moving_loss,**kwargs):
+    if global_iteration % 100 != 0:
+        return
+    # (1-1)*3000+100
+    # - weights
+
+    # - gradients
+    name = "Chargrid"
+    chargrid_net = model.chargrid_net
+
+    visualize_weight_gradient(
+        global_iteration,
+        tensorboard_client,
+        chargrid_net[0],
+        f"{name}_weights/embedding",
+        f"{name}_gradients/embedding"
+    )
+
+    visualize_weight_gradient(
+        global_iteration,
+        tensorboard_client,
+        chargrid_net[3],
+        f"{name}_weights/resnet_conv1",
+        f"{name}_gradients/resnet_conv1"
+    )
+
+    #Chargrid: Early Concat
+    for bottlenet_id,bottleneck in enumerate(chargrid_net[7]):
+        for conv_name in ["conv1"]:
+            visualize_weight_gradient(
+                global_iteration,
+                tensorboard_client,
+                getattr(bottleneck,conv_name),
+                f"{name}_weights/conv2_bottlenet{bottlenet_id}_{conv_name}",
+                f"{name}_gradients/conv2_bottlenet{bottlenet_id}_{conv_name}"
+            )
+
+    #EntityGrid Net
+    name = "Entitygrid"
+    entitygrid_net = model.entitygrid_net
+    """ for idx in [0,3,6,9]:
+        weights = entitygrid_net[idx].weight.data.cpu().numpy()
+        gradients = entitygrid_net[idx].weight.grad.cpu().numpy()
+        tensorboard_client.append_histogram(global_iteration, weights.reshape(-1), f"{name}/weights_{idx}")
+        tensorboard_client.append_histogram(global_iteration, gradients.reshape(-1), f"{name}/gradients_{idx}")
+    """
+    #Chargrid: Early Concat
+    for bottlenet_id,bottleneck in enumerate(entitygrid_net[0]):
+        for conv_name in ["conv1"]:
+            visualize_weight_gradient(
+                global_iteration,
+                tensorboard_client,
+                getattr(bottleneck,conv_name),
+                f"{name}_weights/conv3_bottlenet{bottlenet_id}_{conv_name}",
+                f"{name}_gradients/conv3_bottlenet{bottlenet_id}_{conv_name}"
+            )
+
+    for bottlenet_id,bottleneck in enumerate(entitygrid_net[-1]):
+        for conv_name in ["conv1"]:
+            visualize_weight_gradient(
+                global_iteration,
+                tensorboard_client,
+                getattr(bottleneck,conv_name),
+                f"{name}_weights/conv5_bottlenet{bottlenet_id}_{conv_name}",
+                f"{name}_gradients/conv5_bottlenet{bottlenet_id}_{conv_name}"
+            )
+    
+    # - loss
+    tensorboard_client.append_line(global_iteration,{"loss":loss.detach().item()},"Metrics/running_loss")
+    # - accuracy
+    tensorboard_client.append_line(global_iteration,{run_name:moving_loss},"Metrics/accuracy")
+
+    tensorboard_client.close()
+    
+def visualize_val(global_iteration,run_name,model,tensorboard_client,val_split,class_total,class_correct):
+    chart_dic = {k:class_correct[k] / v
+        for k, v in class_total.items()
+    }
+    tensorboard_client.append_line(
+        global_iteration,chart_dic,
+            f"Metrics/{val_split}_accuracy")
+
+    tensorboard_client.close()
+
+def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True, model_name=None, val_split="val_easy"):
+    run_name = val_split
+    
     print("Inside validation ", epoch)
     # valid_set = DataLoader(
     #     DVQA(
@@ -812,7 +519,6 @@ def valid(epoch, valid_set, load_image=True, model_name=None, val_split="val_eas
     # )
     # valid_set=valid_set_easy if val_split=="val_easy" else val
     dataset = iter(valid_set)
-
     model.eval()  # eval_mode
     class_correct = Counter()
     class_total = Counter()
@@ -830,15 +536,19 @@ def valid(epoch, valid_set, load_image=True, model_name=None, val_split="val_eas
 
             batch_size = labels.shape[0]
             n_channel = labels.shape[-1]
-            chargrid = torch.zeros((batch_size,224,224,n_channel),device=torch.get_device(labels))
+            chargrid = torch.zeros((batch_size,n_channel,224,224),device=torch.get_device(labels))
 
             #Chargrid Creation 
-            for batch_id in range(batch_size):
+            for batch_id in range(labels.shape[0]):
                 for label_id in range(n_label[batch_id].item()):
                     x,y,x2,y2 = bboxes[batch_id,label_id,:]
-                    chargrid[batch_id,y:y2,x:x2,:] = labels[batch_id,label_id]
-            
-            chargrid = chargrid.permute(0,3,1,2)
+                    label_box = labels[batch_id,label_id].repeat((x2-x,y2-y,1)).transpose(2,0)
+                    chargrid[batch_id,:,y:y2,x:x2] = label_box
+            #for batch_id in range(batch_size):
+            #    for label_id in range(n_label[batch_id].item()):
+            #        x,y,x2,y2 = bboxes[batch_id,label_id,:]
+            #        chargrid[batch_id,y:y2,x:x2,:] = labels[batch_id,label_id]
+            #chargrid = chargrid.permute(0,3,1,2)
 
             output = model(image, question, q_len, chargrid)
             correct = output.data.cpu().numpy().argmax(1) == answer.numpy()
@@ -852,6 +562,8 @@ def valid(epoch, valid_set, load_image=True, model_name=None, val_split="val_eas
                     6e4):  # intermediate train, only val on 10% of the validation set
                 break  # early break validation loop
 
+            
+
     class_correct['total'] = sum(class_correct.values())
     class_total['total'] = sum(class_total.values())
 
@@ -864,6 +576,8 @@ def valid(epoch, valid_set, load_image=True, model_name=None, val_split="val_eas
         # TODO: save the model here!
 
     print('Avg Acc: {:.5f}'.format(class_correct['total'] / class_total['total']))
+
+    visualize_val(global_iteration,run_name,model,tensorboard_client,val_split,class_total,class_correct)
 
 
 if __name__ == '__main__':
@@ -957,6 +671,11 @@ if __name__ == '__main__':
 
     )
 
+    #Chargrid: Create Tensorboard Writer
+    tensorboard_client = TensorBoardVisualize(sys.argv[3],"log/")
+    global global_iteration
+    global_iteration = 0
+
     for epoch in range(n_epoch):
         # if scheduler.get_lr()[0] < lr_max:
         #     scheduler.step()
@@ -970,9 +689,9 @@ if __name__ == '__main__':
         #         torch.load(checkpoint_name, map_location='cuda' if torch.cuda.is_available() else 'cpu'))
         #     continue
 
-        train(epoch, load_image=load_image, model_name=model_name)
-        valid(epoch, valid_set_easy, model_name=model_name, load_image=load_image, val_split="val_easy")
-        valid(epoch, valid_set_hard, model_name=model_name, load_image=load_image, val_split="val_hard")
+        train(epoch,tensorboard_client,global_iteration, load_image=load_image, model_name=model_name)
+        valid(epoch,tensorboard_client,global_iteration, valid_set_easy, model_name=model_name, load_image=load_image, val_split="val_easy")
+        valid(epoch,tensorboard_client,global_iteration, valid_set_hard, model_name=model_name, load_image=load_image, val_split="val_hard")
         with open(checkpoint_name, 'wb'
                   ) as f:
             torch.save(model.state_dict(), f)

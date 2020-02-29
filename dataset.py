@@ -203,7 +203,7 @@ class DVQA(Dataset):
 
         #tensor_bboxes = torch.zeros((25,4))
         #tensor_bboxes[:n_label] = torch.tensor(bboxes)
-
+        
         return img, question, len(question), answer, question_class, torch_labels, torch_bboxes, n_label  # answer_class
 
     def __len__(self):
@@ -211,6 +211,8 @@ class DVQA(Dataset):
 
 
 def collate_data(batch):
+    
+
     images, lengths, answers, question_class = [], [], [], []
     batch_size = len(batch)
     max_labels = max([entry[7] for entry in batch])
@@ -237,11 +239,11 @@ def collate_data(batch):
         answers.append(answer)
         question_class.append(class_)
 
+        bboxes = np.clip(bboxes,a_min=0,a_max=224)
+
         batch_labels[i,:n_label,:] = labels
         batch_bboxes[i,:n_label,:] = bboxes
         batch_n_labels[i] = n_label
-
-        
 
 
     return torch.stack(images), torch.from_numpy(questions), \

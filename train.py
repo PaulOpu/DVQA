@@ -487,6 +487,8 @@ def visualize_train(global_iteration,run_name,model,tensorboard_client,loss,movi
     tensorboard_client.append_line(global_iteration,{run_name:moving_loss},"Metrics/accuracy")
 
     tensorboard_client.close()
+
+    return global_iteration
     
 def visualize_val(global_iteration,run_name,model,tensorboard_client,val_split,class_total,class_correct):
     chart_dic = {k:class_correct[k] / v
@@ -689,7 +691,7 @@ if __name__ == '__main__':
         #         torch.load(checkpoint_name, map_location='cuda' if torch.cuda.is_available() else 'cpu'))
         #     continue
 
-        train(epoch,tensorboard_client,global_iteration, load_image=load_image, model_name=model_name)
+        global_iteration = train(epoch,tensorboard_client,global_iteration, load_image=load_image, model_name=model_name)
         valid(epoch,tensorboard_client,global_iteration, valid_set_easy, model_name=model_name, load_image=load_image, val_split="val_easy")
         valid(epoch,tensorboard_client,global_iteration, valid_set_hard, model_name=model_name, load_image=load_image, val_split="val_hard")
         with open(checkpoint_name, 'wb'

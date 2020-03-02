@@ -706,6 +706,7 @@ if __name__ == '__main__':
     if checkpoint_epoch > 0:
         checkpoint_name = 'checkpoint/checkpoint_' + model_name + '_{}.model'.format(str(checkpoint_epoch).zfill(3))
         #model.load_state_dict(torch.load(model.state_dict())
+        print("load from checkpoint ",checkpoint_name)
         model.load_state_dict(
             torch.load(checkpoint_name, map_location='cuda'))
         global_iteration = len(train_set)

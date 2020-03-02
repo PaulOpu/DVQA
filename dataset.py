@@ -12,8 +12,8 @@ from torchvision import transforms
 
 import sys
 import json
-#sys.path.append('/workspace/st_vqa_entitygrid/solution/')
-sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
+sys.path.append('/workspace/st_vqa_entitygrid/solution/')
+#sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
 from dvqa import get_labels_and_bboxes
 from figureqa import load_vectorizer
 
@@ -83,12 +83,12 @@ category = {'0': 'count',
             'no': 'exist',
             'yes': 'exist'}
 
-
 class DVQA(Dataset):
     def __init__(self, root, split='train', transform=None,
                  reverse_question=False, use_preprocessed=False, load_image=True,
                  hdf5_image_dir="data/", load_from_hdf5=True):
-        with open(os.path.join(root,split+'.pkl'), 'rb') as f:
+        #Debug
+        with open(os.path.join(root,'train_debug10000.pkl'), 'rb') as f:
             self.data = pickle.load(f)
 
         with open(os.path.join(root,'dic.pkl'), 'rb') as f:

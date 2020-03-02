@@ -125,17 +125,10 @@ class SANVQA(nn.Module):
         #     pretrained=True)
 
         
-        resnet = torchvision.models.resnet101(
-            pretrained=True)  # 051019, batch_size changed to 32 from 64. ResNet 152 to Resnet 101.
+          # 051019, batch_size changed to 32 from 64. ResNet 152 to Resnet 101.
         # pretrained ImageNet ResNet-101, use the output of final convolutional layer after pooling
 
-        #Chargrid: Early Concat
-        #modules = list(resnet.children())[:-2]
-        modules = list(resnet.children())[:5]
-        # modules = list(resnet.children())[:-1]  # including AvgPool2d, 051019 afternoon by Xin
-
-        #self.resnet = nn.Sequential(*modules)
-        self.resnet = nn.Sequential(*modules)
+        
         self.dropout = nn.Dropout(
             p=dropout_rate)  # insert Dropout layers after convolutional layers that you’re going to fine-tune
 
@@ -148,16 +141,28 @@ class SANVQA(nn.Module):
                                  self.dropout,
                                  nn.Linear(mlp_hidden_size, self.n_class))
 
-        self.fine_tune()  # define which parameter sets are to be fine-tuned
+          # define which parameter sets are to be fine-tuned
         self.hop = 1
 
         act_f = nn.ReLU()
+
+        resnet = torchvision.models.resnet101(
+            pretrained=True)
+            
+        #modules = list(resnet.children())[:-2]
+        #EarlyConcat: modules = list(resnet.children())[:5]
+        concat_point = 6
+        modules = list(resnet.children())[:concat_point]
+
+        #self.resnet = nn.Sequential(*modules)
+        self.resnet = nn.Sequential(*modules)
 
         #Chargrid: Early Concat
         untrained_resnet = torchvision.models.resnet101(
             pretrained=False)
 
-        chargrid_modules = list(untrained_resnet.children())[:5]
+        #EarlyConcat: modules = list(untrained_resnet.children())[:5]
+        chargrid_modules = list(untrained_resnet.children())[:concat_point]
         #replace first module to fit dimensions
         chargrid_modules[0:1] = [
             nn.Conv2d(45, 10, kernel_size=1, stride=1, padding=0),
@@ -169,17 +174,19 @@ class SANVQA(nn.Module):
 
         #After Concat
 
-        entitygrid_modules = list(untrained_resnet.children())[5:-2]
-        #concatentation doubles the number of channels (256->512)
+        #EarlyConcat: entitygrid_modules = list(untrained_resnet.children())[5:-2]
+        entitygrid_modules = list(untrained_resnet.children())[concat_point:-2]
+        #concatentation doubles the number of channels (512->1024)
         entitygrid_modules[0][0].conv1 = nn.Conv2d(
-            512, 128, kernel_size=(1, 1), stride=(1, 1), bias=False)
+            1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
         
         entitygrid_modules[0][0].downsample[0] = nn.Conv2d(
-            512, 512, kernel_size=(1, 1), stride=(2, 2), bias=False)
+            1024, 1024, kernel_size=(1, 1), stride=(2, 2), bias=False)
 
         self.entitygrid_net = nn.Sequential(*entitygrid_modules)
         
-
+        
+        self.fine_tune(True)
 
         #Chargrid: Network before concat with image (224/112/56/28/14)
         """ self.chargrid_net = nn.Sequential(
@@ -285,9 +292,11 @@ class SANVQA(nn.Module):
             for p in self.resnet.parameters():
                 p.requires_grad = False
         else:
-            for c in list(self.resnet.children())[5:]:
+            for c in list(self.resnet.children()):
+            #for c in list(self.resnet.children())[5:]:
                 for p in c.parameters():
                     p.requires_grad = fine_tune
+            
 
         for p in self.mlp.parameters():
             p.requires_grad = True
@@ -296,6 +305,14 @@ class SANVQA(nn.Module):
             print(p.requires_grad, "p.requires_grad")
             p.requires_grad = True
 
+        #Chargrid and EntityGrid
+        for c in list(self.chargrid_net.children()):
+            for p in c.parameters():
+                p.requires_grad = True
+        for c in list(self.entitygrid_net.children()):
+            for p in c.parameters():
+                p.requires_grad = True
+
 
 
 def train(epoch,tensorboard_client,global_iteration, load_image=True, model_name=None):
@@ -303,7 +320,8 @@ def train(epoch,tensorboard_client,global_iteration, load_image=True, model_name
     model.train(True)  # train mode
 
     dataset = iter(train_set)
-    pbar = tqdm(dataset)
+    #pbar = tqdm(dataset)
+    pbar = dataset
     n_batch = len(pbar)
     moving_loss = 0  # it will change when loop over data
 
@@ -408,6 +426,8 @@ def train(epoch,tensorboard_client,global_iteration, load_image=True, model_name
         # print("finished accuracy calculation", end - start)
         # start = time.time()
 
+    return global_iteration  
+
 
 def visualize_weight_gradient(global_iteration,tensorboard_client,module,weight_name,gradient_name):
 
@@ -444,7 +464,7 @@ def visualize_train(global_iteration,run_name,model,tensorboard_client,loss,movi
     )
 
     #Chargrid: Early Concat
-    for bottlenet_id,bottleneck in enumerate(chargrid_net[7]):
+    for bottlenet_id,bottleneck in enumerate(chargrid_net[-1]):
         for conv_name in ["conv1"]:
             visualize_weight_gradient(
                 global_iteration,
@@ -491,17 +511,6 @@ def visualize_train(global_iteration,run_name,model,tensorboard_client,loss,movi
 
     tensorboard_client.close()
 
-    return global_iteration
-    
-def visualize_val(global_iteration,run_name,model,tensorboard_client,val_split,class_total,class_correct):
-    chart_dic = {k:class_correct[k] / v
-        for k, v in class_total.items()
-    }
-    tensorboard_client.append_line(
-        global_iteration,chart_dic,
-            f"Metrics/{val_split}_accuracy")
-
-    tensorboard_client.close()
 
 def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True, model_name=None, val_split="val_easy"):
     run_name = val_split
@@ -584,6 +593,15 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
 
     visualize_val(global_iteration,run_name,model,tensorboard_client,val_split,class_total,class_correct)
 
+def visualize_val(global_iteration,run_name,model,tensorboard_client,val_split,class_total,class_correct):
+    chart_dic = {k:class_correct[k] / v
+        for k, v in class_total.items()
+    }
+    tensorboard_client.append_line(
+        global_iteration,chart_dic,
+            f"Metrics/{val_split}_accuracy")
+
+    tensorboard_client.close()
 
 if __name__ == '__main__':
     data_path = sys.argv[1]
@@ -682,19 +700,29 @@ if __name__ == '__main__':
     global global_iteration
     global_iteration = 0
 
-    for epoch in range(n_epoch):
+    #Chargrid: Continue from Checkpoint
+    checkpoint_epoch = int(sys.argv[4])
+    start_epoch = 0
+    if checkpoint_epoch > 0:
+        checkpoint_name = 'checkpoint/checkpoint_' + model_name + '_{}.model'.format(str(checkpoint_epoch).zfill(3))
+        #model.load_state_dict(torch.load(model.state_dict())
+        model.load_state_dict(
+            torch.load(checkpoint_name, map_location='cuda'))
+        global_iteration = len(train_set)
+        start_epoch = checkpoint_epoch
+
+    for epoch in range(start_epoch,n_epoch):
         # if scheduler.get_lr()[0] < lr_max:
         #     scheduler.step()
         print("epoch=", epoch)
 
         # TODO: add load model from checkpoint
         checkpoint_name = 'checkpoint/checkpoint_' + model_name + '_{}.model'.format(str(epoch + 1).zfill(3))
-        # if os.path.exists(checkpoint_name):
+        #if os.path.exists(checkpoint_name):
         #     # model.load_state_dict(torch.load(model.state_dict())
         #     model.load_state_dict(
         #         torch.load(checkpoint_name, map_location='cuda' if torch.cuda.is_available() else 'cpu'))
         #     continue
-
         global_iteration = train(epoch,tensorboard_client,global_iteration, load_image=load_image, model_name=model_name)
         valid(epoch,tensorboard_client,global_iteration, valid_set_easy, model_name=model_name, load_image=load_image, val_split="val_easy")
         valid(epoch,tensorboard_client,global_iteration, valid_set_hard, model_name=model_name, load_image=load_image, val_split="val_hard")

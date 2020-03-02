@@ -1,7 +1,6 @@
 import os.path as pth
 import json
 import numpy as np
-import visdom
 import time
 import datetime
 

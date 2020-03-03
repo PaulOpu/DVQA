@@ -330,7 +330,7 @@ class SANVQA(nn.Module):
         # we save image as 3,244,244 -> after resnet152, becomes 2048*7*7
         super(SANVQA, self).__init__()
 
-        conv_output_size  = 64 #2048
+        conv_output_size  = 64 * 2 #2048
         lstm_hidden = 32 #512
         mid_feature = 32 #512
         mlp_hidden_size = 32 # 1024
@@ -363,7 +363,14 @@ class SANVQA(nn.Module):
             pretrained=False)
         chargrid_modules = list(chargrid_resnet.children())[:-6]
         chargrid_modules[0] = nn.Conv2d(10, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-        chargrid_modules[0:0]= nn.Conv2d(45,10,1,1,0)
+        chargrid_modules[0:0] = [nn.Conv2d(45,10,1,1,0)]
+        chargrid_modules.append(
+            nn.Sequential(
+                nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 32
+                nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 16
+                nn.MaxPool2d(kernel_size=3, stride=2, padding=1), # -> 8
+            )
+        )
         self.chargrid_net = nn.Sequential(*chargrid_modules)
 
         #chargrid_modules[0][0].conv1 = nn.Conv2d(
@@ -393,9 +400,9 @@ class SANVQA(nn.Module):
 
     def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
         conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
-        #chargrid = self.chargrid_net(chargrid)
+        chargrid = self.chargrid_net(chargrid)
 
-        torch.cat([conv_out,chargrid],1)
+        conv_out = torch.cat([conv_out,chargrid],1)
         # normalize by feature map, why need it and why not??
         # conv_out = conv_out / (conv_out.norm(p=2, dim=1, keepdim=True).expand_as(
         #     conv_out) + 1e-8)  # Section 3.1 of show, ask, attend, tell
@@ -850,7 +857,7 @@ if __name__ == '__main__':
     checkpoint_epoch = int(sys.argv[4])
     start_epoch = 0
     if checkpoint_epoch > 0:
-        checkpoint_name = 'checkpoint/checkpoint_' + model_name + '_{}.model'.format(str(checkpoint_epoch).zfill(3))
+        checkpoint_name = 'checkpoint/checkpoint_' + sys.argv[3] + '_{}.model'.format(str(checkpoint_epoch).zfill(3))
         #model.load_state_dict(torch.load(model.state_dict())
         print("load from checkpoint ",checkpoint_name)
         model.load_state_dict(

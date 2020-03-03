@@ -331,8 +331,10 @@ class SANVQA(nn.Module):
         super(SANVQA, self).__init__()
 
         conv_output_size  = 64 #2048
-        lstm_hidden = 256 #512
-        mid_feature = 64 #512
+        lstm_hidden = 32 #512
+        mid_feature = 32 #512
+        mlp_hidden_size = 32 # 1024
+        embed_hidden = 150
 
         self.n_class = n_class
         self.embed = nn.Embedding(n_vocab, embed_hidden)
@@ -346,15 +348,32 @@ class SANVQA(nn.Module):
         # pretrained ImageNet ResNet-101, use the output of final convolutional layer after pooling
         #Debug: Shallow 
         modules = list(resnet.children())[:-6]#:-2]
+        
         # modules = list(resnet.children())[:-1]  # including AvgPool2d, 051019 afternoon by Xin
         modules.append(
             nn.Sequential(
                 nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 32
                 nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 16
                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1), # -> 8
-                nn.MaxPool2d(kernel_size=3, stride=2, padding=1), # -> 4
             )
         )   
+
+        #Chargrid
+        chargrid_resnet = torchvision.models.resnet101(
+            pretrained=False)
+        chargrid_modules = list(chargrid_resnet.children())[:-6]
+        chargrid_modules[0] = nn.Conv2d(10, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        chargrid_modules[0:0]= nn.Conv2d(45,10,1,1,0)
+        self.chargrid_net = nn.Sequential(*chargrid_modules)
+
+        #chargrid_modules[0][0].conv1 = nn.Conv2d(
+        #    1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        
+        #entitygrid_modules[0][0].downsample[0] = nn.Conv2d(
+        #    1024, 1024, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        #self.chargrid_net = nn.Sequential(
+        #    nn.Conv2d(64, mid_features, 1)
+        #)
 
         self.resnet = nn.Sequential(*modules)
         self.dropout = nn.Dropout(
@@ -374,7 +393,9 @@ class SANVQA(nn.Module):
 
     def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
         conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
+        #chargrid = self.chargrid_net(chargrid)
 
+        torch.cat([conv_out,chargrid],1)
         # normalize by feature map, why need it and why not??
         # conv_out = conv_out / (conv_out.norm(p=2, dim=1, keepdim=True).expand_as(
         #     conv_out) + 1e-8)  # Section 3.1 of show, ask, attend, tell
@@ -542,6 +563,7 @@ def train(epoch,tensorboard_client,global_iteration, load_image=True, model_name
 
         #Chargrid: visualize
         visualize_train(global_iteration,run_name,model,tensorboard_client,loss,moving_loss)
+
         #end.record()
         #torch.cuda.synchronize()
         #print("Visu: ",start.elapsed_time(end))
@@ -553,7 +575,7 @@ def train(epoch,tensorboard_client,global_iteration, load_image=True, model_name
 
     valid(epoch + float(i * batch_size / 2325316),tensorboard_client,global_iteration, train_set, model_name=model_name,
                 load_image=load_image, val_split="train")
-    
+    tensorboard_client.close()
     return global_iteration
     
 
@@ -567,7 +589,7 @@ def visualize_weight_gradient(global_iteration,tensorboard_client,module,weight_
 
 
 def visualize_train(global_iteration,run_name,model,tensorboard_client,loss,moving_loss,**kwargs):
-    if global_iteration % 100 != 0:
+    if global_iteration % 10 != 0:
         return
     #Debug
     """ 
@@ -636,7 +658,7 @@ def visualize_train(global_iteration,run_name,model,tensorboard_client,loss,movi
     # - accuracy
     tensorboard_client.append_line(global_iteration,{run_name:moving_loss},"Metrics/accuracy")
 
-    tensorboard_client.close()
+    
 
 
 def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True, model_name=None, val_split="val_easy"):
@@ -725,7 +747,7 @@ def visualize_val(global_iteration,run_name,model,tensorboard_client,val_split,c
         global_iteration,chart_dic,
             f"Metrics/{val_split}_accuracy")
 
-    tensorboard_client.close()
+    #tensorboard_client.close()
 
 if __name__ == '__main__':
     data_path = sys.argv[1]

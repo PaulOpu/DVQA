@@ -205,7 +205,7 @@ class DVQA(Dataset):
         #tensor_bboxes = torch.zeros((25,4))
         #tensor_bboxes[:n_label] = torch.tensor(bboxes)
         
-        return img, question, len(question), answer, question_class, torch_labels, torch_bboxes, n_label  # answer_class
+        return img, question, len(question), answer, question_class, torch_labels, torch_bboxes, n_label, hdf5_idx_for_this_image  # answer_class
 
     def __len__(self):
         return len(self.data)
@@ -222,8 +222,7 @@ def collate_data(batch):
     batch_labels = torch.zeros((batch_size,max_labels,max_label_dim))
     batch_bboxes = np.zeros((batch_size,max_labels,4),int)#torch.zeros((batch_size,max_labels,4))
     batch_n_labels = torch.zeros((batch_size),dtype=torch.int32)
-
-    
+    img_ids = torch.zeros((batch_size))
 
     max_len = max(map(lambda x: len(x[1]), batch))
 
@@ -232,7 +231,7 @@ def collate_data(batch):
 
     for i, b in enumerate(sort_by_len):
         #Chargrid: collate labels/bboxes 
-        image, question, length, answer, class_, labels, bboxes, n_label = b  # destructure a batch's data
+        image, question, length, answer, class_, labels, bboxes, n_label, hdf5_idx_for_this_image = b  # destructure a batch's data
         images.append(image)
         length = len(question)
         questions[i, :length] = question
@@ -245,8 +244,8 @@ def collate_data(batch):
         batch_labels[i,:n_label,:] = labels
         batch_bboxes[i,:n_label,:] = bboxes
         batch_n_labels[i] = n_label
-
+        img_ids[i] = hdf5_idx_for_this_image
 
     return torch.stack(images), torch.from_numpy(questions), \
            lengths, torch.LongTensor(answers), question_class, \
-           batch_labels, batch_bboxes, batch_n_labels
+           batch_labels, batch_bboxes, batch_n_labels, img_ids

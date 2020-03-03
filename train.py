@@ -350,28 +350,27 @@ class SANVQA(nn.Module):
         modules = list(resnet.children())[:-6]#:-2]
         
         # modules = list(resnet.children())[:-1]  # including AvgPool2d, 051019 afternoon by Xin
-        modules.append(
-            nn.Sequential(
-                nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 32
-                nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 16
-                nn.MaxPool2d(kernel_size=3, stride=2, padding=1), # -> 8
-            )
-        )   
+
+        act_f = nn.ReLU()
 
         #Chargrid
         chargrid_resnet = torchvision.models.resnet101(
             pretrained=False)
         chargrid_modules = list(chargrid_resnet.children())[:-6]
         chargrid_modules[0] = nn.Conv2d(10, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-        chargrid_modules[0:0] = [nn.Conv2d(45,10,1,1,0)]
-        chargrid_modules.append(
-            nn.Sequential(
-                nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 32
-                nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 16
-                nn.MaxPool2d(kernel_size=3, stride=2, padding=1), # -> 8
-            )
-        )
+        chargrid_modules[0:0] = [
+            nn.Conv2d(45,10,1,1,0),
+            nn.BatchNorm2d(10),
+            act_f
+            ]
+
         self.chargrid_net = nn.Sequential(*chargrid_modules)
+
+        self.entitygrid_net = nn.Sequential(
+            nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 28
+            nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 14
+            nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 8
+        )
 
         #chargrid_modules[0][0].conv1 = nn.Conv2d(
         #    1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
@@ -403,6 +402,7 @@ class SANVQA(nn.Module):
         chargrid = self.chargrid_net(chargrid)
 
         conv_out = torch.cat([conv_out,chargrid],1)
+        conv_out = self.entitygrid_net(conv_out)
         # normalize by feature map, why need it and why not??
         # conv_out = conv_out / (conv_out.norm(p=2, dim=1, keepdim=True).expand_as(
         #     conv_out) + 1e-8)  # Section 3.1 of show, ask, attend, tell
@@ -486,7 +486,7 @@ def train(epoch,tensorboard_client,global_iteration, load_image=True, model_name
     print(device)
     print(next(model.parameters()).is_cuda, "next(model.parameters()).is_cuda")
     #Chargrid load labels,bboxes
-    for i, (image, question, q_len, answer, question_class, labels, bboxes, n_label) in enumerate(pbar):
+    for i, (image, question, q_len, answer, question_class, labels, bboxes, n_label, img_ids) in enumerate(pbar):
 
 
         start.record()
@@ -580,9 +580,9 @@ def train(epoch,tensorboard_client,global_iteration, load_image=True, model_name
         # print("finished accuracy calculation", end - start)
         # start = time.time()
 
-    valid(epoch + float(i * batch_size / 2325316),tensorboard_client,global_iteration, train_set, model_name=model_name,
-                load_image=load_image, val_split="train")
-    tensorboard_client.close()
+    #valid(epoch + float(i * batch_size / 2325316),tensorboard_client,global_iteration, train_set, model_name=model_name,
+    #            load_image=load_image, val_split="train")
+    
     return global_iteration
     
 
@@ -599,7 +599,7 @@ def visualize_train(global_iteration,run_name,model,tensorboard_client,loss,movi
     if global_iteration % 10 != 0:
         return
     #Debug
-    """ 
+     
     name = "Chargrid"
     chargrid_net = model.chargrid_net
 
@@ -618,7 +618,7 @@ def visualize_train(global_iteration,run_name,model,tensorboard_client,loss,movi
         f"{name}_weights/resnet_conv1",
         f"{name}_gradients/resnet_conv1"
     )
-
+    """
     #Chargrid: Early Concat
     for bottlenet_id,bottleneck in enumerate(chargrid_net[-1]):
         for conv_name in ["conv1"]:
@@ -692,10 +692,11 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     model.eval()  # eval_mode
     class_correct = Counter()
     class_total = Counter()
+    prediction = []
 
     with torch.no_grad():
 
-        for i, (image, question, q_len, answer, answer_class, labels, bboxes, n_label) in enumerate(tqdm(dataset)):
+        for i, (image, question, q_len, answer, answer_class, labels, bboxes, n_label, img_ids) in enumerate(tqdm(dataset)):
             image, question, q_len, labels, bboxes, n_label = (
                 image.to(device),
                 question.to(device),
@@ -717,18 +718,20 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
                     chargrid[batch_id,:,y:y2,x:x2] = label_box
 
             output = model(image, question, q_len, chargrid)
-            correct = output.data.cpu().numpy().argmax(1) == answer.numpy()
+            argmax_output = output.data.cpu().numpy().argmax(1)
+            numpy_answer = answer.numpy()
+            correct = argmax_output == numpy_answer
             for c, class_ in zip(correct, answer_class):
                 if c:  # if correct
                     class_correct[class_] += 1
                 class_total[class_] += 1
 
+            prediction.append([img_ids.numpy(),question.cpu().numpy(),numpy_answer,argmax_output,answer_class])
+
             if (("IMG" in model_name) or ("SAN" in model_name)) and type(epoch) == type(0.1) and (
                     i * batch_size // 2) > (
                     6e4):  # intermediate train, only val on 10% of the validation set
                 break  # early break validation loop
-
-            
 
     class_correct['total'] = sum(class_correct.values())
     class_total['total'] = sum(class_total.values())
@@ -745,6 +748,8 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     print('Avg Acc: {:.5f}'.format(class_correct['total'] / class_total['total']))
 
     visualize_val(global_iteration,run_name,model,tensorboard_client,val_split,class_total,class_correct)
+
+    return prediction
 
 def visualize_val(global_iteration,run_name,model,tensorboard_client,val_split,class_total,class_correct):
     chart_dic = {k:class_correct[k] / v
@@ -817,10 +822,10 @@ if __name__ == '__main__':
     )
 
     #Debug
-    """ valid_set_easy = DataLoader(
+    valid_set_easy = DataLoader(
         DVQA(
             sys.argv[1],
-            "val_easy",
+            "train",
             transform=None,
             reverse_question=reverse_question,
             use_preprocessed=True,
@@ -832,7 +837,7 @@ if __name__ == '__main__':
         collate_fn=collate_data,  ## shuffle=False
 
     )
-
+    """
     valid_set_hard = DataLoader(
         DVQA(
             sys.argv[1],
@@ -871,7 +876,7 @@ if __name__ == '__main__':
         print("epoch=", epoch)
 
         # TODO: add load model from checkpoint
-        checkpoint_name = 'checkpoint/checkpoint_' + model_name + '_{}.model'.format(str(epoch + 1).zfill(3))
+        checkpoint_name = 'checkpoint/checkpoint_' + sys.argv[3] + '_{}.model'.format(str(epoch + 1).zfill(3))
         #if os.path.exists(checkpoint_name):
         #     # model.load_state_dict(torch.load(model.state_dict())
         #     model.load_state_dict(
@@ -879,8 +884,11 @@ if __name__ == '__main__':
         #     continue
         global_iteration = train(epoch,tensorboard_client,global_iteration, load_image=load_image, model_name=model_name)
         #Debug
-        #valid(epoch,tensorboard_client,global_iteration, valid_set_easy, model_name=model_name, load_image=load_image, val_split="val_easy")
+        prediction = valid(epoch,tensorboard_client,global_iteration, valid_set_easy, model_name=model_name, load_image=load_image, val_split="train")
+        pickle.dump(prediction,open(f"/workspace/DVQA/predictions/prediction_{sys.argv[3]}.pkl","wb"))
+        
         #valid(epoch,tensorboard_client,global_iteration, valid_set_hard, model_name=model_name, load_image=load_image, val_split="val_hard")
+        tensorboard_client.close()
         with open(checkpoint_name, 'wb'
                   ) as f:
             torch.save(model.state_dict(), f)

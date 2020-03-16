@@ -4,3 +4,4 @@ checkpoint/
 data/
 log/
 predictions/
+checkpoint_dump/

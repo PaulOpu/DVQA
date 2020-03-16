@@ -46,7 +46,7 @@ data_parallel = False
 lr_step = 20
 lr_gamma = 2  # gamma (float) – Multiplicative factor of learning rate decay. Default: 0.1.
 weight_decay = 1e-4
-n_epoch = 1200
+n_epoch = 4000
 reverse_question = False
 batch_size = 128#(64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
 n_workers = 0 #0  # 4
@@ -335,10 +335,11 @@ class SANVQA(nn.Module):
 
         #just concat
         conv_output_size  = 64 #* 2 #2048
-        lstm_hidden = 32 #512
-        mid_feature = 32 #512
-        mlp_hidden_size = 32 # 1024
-        embed_hidden = 150
+        lstm_hidden = 16 #512
+        mid_feature = 16 #512
+        mlp_hidden_size = 16 # 1024
+        embed_hidden = 50
+        glimpses = 1
 
         self.n_class = n_class
         self.embed = nn.Embedding(n_vocab, embed_hidden)
@@ -352,7 +353,8 @@ class SANVQA(nn.Module):
         # pretrained ImageNet ResNet-101, use the output of final convolutional layer after pooling
         #Debug: Shallow 
         modules = list(resnet.children())[:-6]#:-2]
-        
+        modules[0] = nn.Conv2d(3, conv_output_size, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        modules[1] = nn.BatchNorm2d(conv_output_size)
 
         # modules = list(resnet.children())[:-1]  # including AvgPool2d, 051019 afternoon by Xin
 
@@ -592,7 +594,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
             global_iteration,run_name,model,tensorboard_client,
             loss,moving_loss,attention_map)
 
-        if global_iteration % 30 == 0:
+        if global_iteration % 50 == 0:
         
             #Image Layer
             visu_net = model.resnet
@@ -941,12 +943,13 @@ if __name__ == '__main__':
             train_set.dataset.answer_class,
             load_image=load_image, model_name=model_name)
         #Debug
-        prediction = valid(epoch,tensorboard_client,global_iteration, valid_set_easy, model_name=model_name, load_image=load_image, val_split="train")
+        if epoch % 10 == 0:
+            prediction = valid(epoch,tensorboard_client,global_iteration, valid_set_easy, model_name=model_name, load_image=load_image, val_split="train")
 
         #valid(epoch,tensorboard_client,global_iteration, valid_set_hard, model_name=model_name, load_image=load_image, val_split="val_hard")
         tensorboard_client.close()
         
-        if epoch % 50 == 0:
+        if epoch % 100 == 0:
             with open(checkpoint_name, 'wb') as f:
                 torch.save(model.state_dict(), f)
             pickle.dump(prediction,open(f"/workspace/DVQA/predictions/prediction_{sys.argv[3]}_{epoch}.pkl","wb"))

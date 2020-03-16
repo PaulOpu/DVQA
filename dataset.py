@@ -10,6 +10,7 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
+
 import sys
 import json
 sys.path.append('/workspace/st_vqa_entitygrid/solution/')
@@ -86,9 +87,9 @@ category = {'0': 'count',
 class DVQA(Dataset):
     def __init__(self, root, split='train', transform=None,
                  reverse_question=False, use_preprocessed=False, load_image=True,
-                 hdf5_image_dir="data/", load_from_hdf5=True):
+                 hdf5_image_dir="data/", load_from_hdf5=True, file_name="train.pkl"):
         #Debug
-        with open(os.path.join(root,'train_debug10000.pkl'), 'rb') as f:
+        with open(os.path.join(root,file_name), 'rb') as f:
             self.data = pickle.load(f)
 
         with open(os.path.join(root,'dic.pkl'), 'rb') as f:

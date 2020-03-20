@@ -48,7 +48,7 @@ lr_gamma = 2  # gamma (float) – Multiplicative factor of learning rate decay. 
 weight_decay = 1e-4
 n_epoch = 4000
 reverse_question = False
-batch_size = 128#(64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
+batch_size = 128#128#(64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
 n_workers = 0 #0  # 4
 clip_norm = 50
 load_image = False
@@ -594,7 +594,10 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
             global_iteration,run_name,model,tensorboard_client,
             loss,moving_loss,attention_map)
 
+        #if global_iteration % 50 * batch_size == 0:
         if global_iteration % 50 == 0:
+
+            n_pictures = min(16,batch_size)
         
             #Image Layer
             visu_net = model.resnet
@@ -603,14 +606,14 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
                 visu_net[0],
                 "Image_Conv1",
                 "img_act0",
-                16
+                n_pictures
             )
 
             #Input
-            visu_img = image[:16].cpu().numpy()
-            visu_question = question[:16].cpu().numpy()
-            visu_answer = answer[:16].cpu().numpy()
-            visu_output = output[:16].data.cpu().numpy().argmax(1)
+            visu_img = image[:n_pictures].cpu().numpy()
+            visu_question = question[:n_pictures].cpu().numpy()
+            visu_answer = answer[:n_pictures].cpu().numpy()
+            visu_output = output[:n_pictures].data.cpu().numpy().argmax(1)
 
             tensorboard_client.add_figure_with_question(
                 global_iteration,
@@ -622,20 +625,23 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
 
             #Attention
             #attention_features = F.pad(attention_map.features[:16].detach().cpu(),(2,2,2,2))
-            attention_features = attention_map.features[:16].detach().cpu()     
+            attention_features = attention_map.features[:n_pictures].detach().cpu()     
             glimpses = attention_features.size(1)
-            attention_features = attention_features.view(16, glimpses, -1)
-            attention_features = F.softmax(attention_features, dim=-1).unsqueeze(2)
-            att1,att2 = torch.split(attention_features,1,1)
+            grid_size = attention_features.size(2)
+            attention_features = attention_features.view(n_pictures, glimpses, -1)
+            #attention_features = F.softmax(attention_features, dim=-1).unsqueeze(2)
+            attention_features = attention_features.view(n_pictures, glimpses, grid_size, grid_size)
+            #att1,att2 = torch.split(attention_features,1,1)
+            att1 = attention_features
 
             tensorboard_client.add_images(
                 global_iteration,
                 att1,
                 "Batch/attention_glimps1")
-            tensorboard_client.add_images(
-                global_iteration,
-                att2,
-                "Batch/attention_glimps2")
+            #tensorboard_client.add_images(
+            #    global_iteration,
+            #    att2,
+            #    "Batch/attention_glimps2")
 
 
             #Chargrid
@@ -665,7 +671,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
             #     visu_output,
             #     "Chargrid")
 
-
+        #Replace by batch_size
         global_iteration += 1
 
     #valid(epoch + float(i * batch_size / 2325316),tensorboard_client,global_iteration, train_set, model_name=model_name,
@@ -885,7 +891,7 @@ if __name__ == '__main__':
             load_from_hdf5=load_from_hdf5,
             file_name=sys.argv[5]
         ),
-        batch_size=batch_size // 2,
+        batch_size=batch_size,# // 2,
         num_workers=n_workers,
         collate_fn=collate_data,  ## shuffle=False
 
@@ -905,7 +911,8 @@ if __name__ == '__main__':
         num_workers=n_workers,
         collate_fn=collate_data,  ## shuffle=False
 
-    ) """
+    ) 
+    """
 
     #Chargrid: Create Tensorboard Writer
     tensorboard_client = TensorBoardVisualize(sys.argv[3],"log/",dic)

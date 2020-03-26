@@ -149,47 +149,47 @@ class SANVQA(nn.Module):
         resnet = torchvision.models.resnet101(
             pretrained=True)
             
-        #modules = list(resnet.children())[:-2]
+        modules = list(resnet.children())[:-2]
         #EarlyConcat: modules = list(resnet.children())[:5]
-        concat_point = 6
-        modules = list(resnet.children())[:concat_point]
+        #concat_point = 6
+        #modules = list(resnet.children())[:concat_point]
 
         #self.resnet = nn.Sequential(*modules)
         self.resnet = nn.Sequential(*modules)
 
         #Chargrid: Early Concat
-        untrained_resnet = torchvision.models.resnet101(
-            pretrained=False)
+        #untrained_resnet = torchvision.models.resnet101(
+        #    pretrained=False)
 
         #EarlyConcat: modules = list(untrained_resnet.children())[:5]
-        chargrid_modules = list(untrained_resnet.children())[:concat_point]
+        #chargrid_modules = list(untrained_resnet.children())[:concat_point]
         #replace first module to fit dimensions
-        chargrid_modules[0:1] = [
-            nn.Conv2d(45, 10, kernel_size=1, stride=1, padding=0),
-            nn.BatchNorm2d(10),
-            act_f,
-            nn.Conv2d(10, 64, kernel_size=7, stride=2, padding=3)]
+        #chargrid_modules[0:1] = [
+        #    nn.Conv2d(45, 10, kernel_size=1, stride=1, padding=0),
+        #    nn.BatchNorm2d(10),
+        #    act_f,
+        #    nn.Conv2d(10, 64, kernel_size=7, stride=2, padding=3)]
 
-        self.chargrid_net = nn.Sequential(*chargrid_modules)
+        #self.chargrid_net = nn.Sequential(*chargrid_modules)
 
         #After Concat
 
         #EarlyConcat: entitygrid_modules = list(untrained_resnet.children())[5:-2]
-        entitygrid_modules = list(untrained_resnet.children())[concat_point:-2]
+        #entitygrid_modules = list(untrained_resnet.children())[concat_point:-2]
         #concatentation doubles the number of channels (512->1024)
-        entitygrid_modules[0][0].conv1 = nn.Conv2d(
-            1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
+        #entitygrid_modules[0][0].conv1 = nn.Conv2d(
+        #    1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
         
-        entitygrid_modules[0][0].downsample[0] = nn.Conv2d(
-            1024, 1024, kernel_size=(1, 1), stride=(2, 2), bias=False)
+        #entitygrid_modules[0][0].downsample[0] = nn.Conv2d(
+        #    1024, 1024, kernel_size=(1, 1), stride=(2, 2), bias=False)
 
-        self.entitygrid_net = nn.Sequential(*entitygrid_modules)
+        #self.entitygrid_net = nn.Sequential(*entitygrid_modules)
         
         
-        self.fine_tune(True)
+        
 
         #Chargrid: Network before concat with image (224/112/56/28/14)
-        """ self.chargrid_net = nn.Sequential(
+        self.chargrid_net = nn.Sequential(
                 nn.Conv2d(45, 10, kernel_size=1, stride=1, padding=0),
                 nn.BatchNorm2d(10),
                 act_f,
@@ -223,7 +223,9 @@ class SANVQA(nn.Module):
                 nn.Conv2d(2048, 2048, kernel_size=3, stride=1, padding=1),
                 nn.BatchNorm2d(2048),
                 act_f
-            ) """
+            )
+
+        self.fine_tune(True)
 
 
 
@@ -241,7 +243,7 @@ class SANVQA(nn.Module):
         # conv_out = conv_out.view(conv_out.size(0), -1).contiguous()
 
         #Chargrid: Enlarge Img Vector
-        #conv_out = enlarge_batch_tensor(conv_out)
+        conv_out = enlarge_batch_tensor(conv_out)
         chargrid = self.chargrid_net(chargrid)
 
         conv_out = torch.cat([conv_out,chargrid],dim=1)
@@ -416,10 +418,15 @@ def train(epoch,tensorboard_client,global_iteration, load_image=True, model_name
             model.train(True)
 
         #Chargrid: visualize
-        visualize_train(global_iteration,run_name,model,tensorboard_client,loss,moving_loss)
+        #visualize_train(global_iteration,run_name,model,tensorboard_client,loss,moving_loss)
         #end.record()
         #torch.cuda.synchronize()
         #print("Visu: ",start.elapsed_time(end))
+
+        # - loss
+        tensorboard_client.append_line(global_iteration,{"loss":loss.detach().item()},"Metrics/running_loss")
+        # - accuracy
+        tensorboard_client.append_line(global_iteration,{run_name:moving_loss},"Metrics/accuracy")
 
         global_iteration += 1
         # end = time.time()

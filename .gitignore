@@ -5,3 +5,5 @@ data/
 log/
 predictions/
 checkpoint_dump/
+old_log/
+scores/

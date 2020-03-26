@@ -14,7 +14,7 @@ import seaborn as sns
 
 class TensorBoardVisualize():
 
-    def __init__(self, experiment_name, logdir,dic):
+    def __init__(self, experiment_name, logdir, dic):
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         self.tensorboard_writer = SummaryWriter(
             log_dir=pth.join(logdir,experiment_name+"_"+current_time),
@@ -27,6 +27,11 @@ class TensorBoardVisualize():
         self.answer_vect = np.vectorize(lambda x: self.answer_dic[x])
 
         self.hooks = {}
+
+    def get_current_epoch(iteration):
+
+        return iteration / self.batch_size
+
 
     def register_hook(self,key,hook):
         self.hooks[key] = hook
@@ -45,7 +50,7 @@ class TensorBoardVisualize():
                 chart, images, global_step=x, 
                 walltime=None, dataformats='NCHW')
 
-    def add_conv2(self,x,module,chart,hook_name,n_act):
+    def add_conv2(self,x,module,chart,hook_name,mask,n_act,suffix=""):
 
         #weights and gradients
         weights = module.weight.data.cpu().numpy()
@@ -55,13 +60,13 @@ class TensorBoardVisualize():
 
         #need hook
         act_hook = self.hooks[hook_name]
-        act = act_hook.features[:n_act].sum(1,keepdim=True).cpu()
+        act = act_hook.features[mask][:n_act].sum(1,keepdim=True).cpu()
         self.add_images(
            x,
            act,
-           f"{chart}/activations")
+           f"{chart}/activations{suffix}")
 
-    def add_figure_with_question(self,x,image,question,answer,output,chart):
+    def add_figure_with_question(self,x,image,question,answer,output,chart,suffix=""):
         norm_img = mpl.colors.Normalize(vmin=-1,vmax=1)
         visu_question = self.word_vect(question)
         visu_answer = self.answer_vect(answer)
@@ -82,7 +87,7 @@ class TensorBoardVisualize():
             figures.append(fig)
         
         self.tensorboard_writer.add_figure(
-            f"{chart}/img + question + answer/output",
+            f"{chart}/sample{suffix}",
             figures,
             x)
 

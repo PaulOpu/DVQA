@@ -19,7 +19,6 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import textwrap
-import seaborn as sns
 
 #sys.path.append('/workspace/st_vqa_entitygrid/solution/')
 sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')

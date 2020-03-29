@@ -9,7 +9,6 @@ from torch.utils.tensorboard import SummaryWriter
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import textwrap
-import seaborn as sns
 
 
 class TensorBoardVisualize():

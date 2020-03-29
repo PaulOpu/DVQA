@@ -59,7 +59,7 @@ class TensorBoardVisualize():
 
         #need hook
         act_hook = self.hooks[hook_name]
-        act = act_hook.features[mask][:n_act].sum(1,keepdim=True).cpu()
+        act = act_hook.get_features()[mask][:n_act].sum(1,keepdim=True).cpu()
         self.add_images(
            x,
            act,
@@ -102,7 +102,12 @@ class TensorBoardVisualize():
 class SaveFeatures():
     def __init__(self, module):
         self.hook = module.register_forward_hook(self.hook_fn)
+        self.features = [0,0]
     def hook_fn(self, module, input, output):
-        self.features = output.detach() #torch.tensor(output,requires_grad=True).cuda()
+        self.features[output.device.index] = output.detach() #torch.tensor(output,requires_grad=True).cuda()
+    def get_features(self):
+        if self.features[1] == 0:
+            return self.features[0]
+        return torch.cat(self.features,0)
     def close(self):
         self.hook.remove()

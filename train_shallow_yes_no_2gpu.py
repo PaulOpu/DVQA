@@ -19,6 +19,8 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import textwrap
+import pdb
+
 
 #sys.path.append('/workspace/st_vqa_entitygrid/solution/')
 sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
@@ -40,22 +42,22 @@ model_name = "SANVQA"  # "SANVQAbeta" # "SANVQA"  # "IMGQUES"  # "IMG"  # "IMG" 
 use_annotation = True if model_name == "SANDY" else False
 lr = 1e-3
 lr_max = 1e-2
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu") #torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 data_parallel = False
 lr_step = 20
 lr_gamma = 2  # gamma (float) – Multiplicative factor of learning rate decay. Default: 0.1.
 weight_decay = 1e-4
 n_epoch = 4000
 reverse_question = False
-batch_size = 128#(64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
-n_workers = 0 #0  # 4
+batch_size = 256#(64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
+n_workers = 4 #0  # 4
 clip_norm = 50
 load_image = False
 
 #Saving Parameters (every 
-saving_epoch = 1
+saving_epoch = 2
 train_progress_iteration = 2
-train_visualization_iteration = 50
+train_visualization_iteration = 100
 validation_epoch = 1
 
 
@@ -408,6 +410,7 @@ class SANVQA(nn.Module):
         self.hop = 1
 
     def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
+        #pdb.set_trace()
         conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
         
         #Chargrid here and 2 * 64
@@ -427,16 +430,17 @@ class SANVQA(nn.Module):
         embed_pack = nn.utils.rnn.pack_padded_sequence(
             embed, question_len, batch_first=True
         )
+        self.lstm.flatten_parameters()
         lstm_output, (h, c) = self.lstm(embed_pack)
 
         # pad packed sequence to get last timestamp of lstm hidden
         lstm_output, _ = torch.nn.utils.rnn.pad_packed_sequence(
             lstm_output, batch_first=True)
 
-        idx = (torch.LongTensor(question_len) - 1).view(-1, 1).expand(
+        idx = (question_len - 1).view(-1, 1).expand(
             len(question_len), lstm_output.size(2))
         time_dimension = 1  # if batch_first else 0
-        idx = idx.unsqueeze(time_dimension).to(device)
+        idx = idx.unsqueeze(time_dimension).to(question_len.device)
 
         lstm_final_output = lstm_output.gather(
             time_dimension, idx).squeeze(time_dimension)
@@ -508,8 +512,8 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     plt.style.use('seaborn-white')
 
     #Train Epoch
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
+    #start = torch.cuda.Event(enable_timing=True)
+    #end = torch.cuda.Event(enable_timing=True)
 
     
 
@@ -519,7 +523,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     for i, (image, question, q_len, answer, question_class, labels, bboxes, n_label, data_index) in enumerate(pbar):
 
 
-        start.record()
+        #start.record()
         image, question, q_len, answer,labels,bboxes,n_label = (
             image.to(device),
             question.to(device),
@@ -590,7 +594,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
 
             
         
-        if (("IMG" in model_name) or ("SAN" in model_name)) and i % 10 == 0 and i != 0:
+        if (("IMG" in model_name) or ("SAN" in model_name)) and i % 10000 == 0 and i != 0 and 1 == 0:
             # valid(epoch + float(i * batch_size / 2325316), model_name=model_name, val_split="val_easy",
             #       load_image=load_image)
             valid(epoch + float(i * batch_size / 2325316),tensorboard_client,global_iteration, valid_set_easy, model_name=model_name,
@@ -875,7 +879,7 @@ if __name__ == '__main__':
 
     elif model_name == "SANVQA" or "SANVQAbeta":
         model = SANVQA(n_answers, n_vocab=n_words, encoded_image_size=(14 if load_from_hdf5 == False else 7))
-        #model = nn.DataParallel(model)
+        model = nn.DataParallel(model)
         load_image = True
         model = model.to(device)
 
@@ -1007,7 +1011,7 @@ if __name__ == '__main__':
             checkpoint_name = f'checkpoint/checkpoint_{sys.argv[3]}_{str(epoch + 1).zfill(3)}.model'
             with open(checkpoint_name, 'wb') as f:
                 torch.save(model.state_dict(), f)
-            pickle.dump(prediction,open(f"predictions/prediction_{sys.argv[3]}_{epoch}.pkl","wb"))
+            pickle.dump(prediction,open(f"/workspace/DVQA/predictions/prediction_{sys.argv[3]}_{epoch}.pkl","wb"))
         
         print("model saved! epoch=", epoch)
 

@@ -59,6 +59,9 @@ train_progress_iteration = 2
 train_visualization_iteration = 50
 validation_epoch = 1
 
+#Label Encoder
+n_label_channels = 41
+
 
 class Attention(nn.Module):  # SANVQAbeta
     def __init__(self, v_features, q_features, mid_features, glimpses, drop=0.5):
@@ -536,19 +539,23 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     print(device)
     print(next(model.parameters()).is_cuda, "next(model.parameters()).is_cuda")
     #Chargrid load labels,bboxes
-    for i, (image, question, q_len, answer, question_class, bboxes, n_bboxes, data_index) in enumerate(pbar):
+    ##for i, (image, question, q_len, answer, question_class, bboxes, n_bboxes, data_index) in enumerate(pbar):
+    for i, (image, question, q_len, answer, question_class, chargrid, data_index) in enumerate(pbar):
 
-        image, question, q_len, answer, bboxes = (
+        image, question, q_len, answer, chargrid = (##bboxes = (
             image.to(device),
             question.to(device),
             torch.tensor(q_len),
             answer.to(device),
-            bboxes.to(device)
+            ##bboxes.to(device)
+            chargrid.to(device)
         )
         #end.record()
         tmp_batch_size = question.shape[0]
         #Chargrid: Creation
-        chargrid = chargrid_creation(bboxes,n_bboxes,question.get_device(),tmp_batch_size)
+        ##chargrid = chargrid_creation(bboxes,n_bboxes,question.get_device(),tmp_batch_size)
+        encoded_chargrid = torch.zeros((tmp_batch_size, n_label_channels,224,224),device=device)
+        encoded_chargrid = encoded_chargrid.scatter_(1, chargrid.unsqueeze(1), 1)
         # batch_size = labels.shape[0]
         # n_channel = labels.shape[-1]
         # chargrid = torch.zeros((batch_size,n_channel,224,224),device=torch.get_device(labels))
@@ -563,7 +570,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
 
 
         model.zero_grad()
-        output = model(image, question, q_len, chargrid)
+        output = model(image, question, q_len, encoded_chargrid)
         #end.record()
         #torch.cuda.synchronize()
         #print("Forward: ",start.elapsed_time(end))
@@ -787,19 +794,22 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
 
     with torch.no_grad():
 
-        for i, (image, question, q_len, answer, answer_class, bboxes, n_bboxes, data_index) in enumerate(tqdm(dataset)):
-            image, question, q_len, bboxes = (
+        ##for i, (image, question, q_len, answer, answer_class, bboxes, n_bboxes, data_index) in enumerate(tqdm(dataset)):
+        for i, (image, question, q_len, answer, answer_class, chargrid, data_index) in enumerate(tqdm(dataset)):
+            image, question, q_len, chargrid = (
                 image.to(device),
                 question.to(device),
                 torch.tensor(q_len),
-                bboxes.to(device)
+                ##bboxes.to(device)
+                chargrid.to(device)
             )
 
             #batch_size = labels.shape[0]
             #n_channel = labels.shape[-1]
             tmp_batch_size = question.shape[0]
-            chargrid = chargrid_creation(bboxes,n_bboxes,question.get_device(),tmp_batch_size)
-
+            ##chargrid = chargrid_creation(bboxes,n_bboxes,question.get_device(),tmp_batch_size)
+            encoded_chargrid = torch.zeros((tmp_batch_size, n_label_channels,224,224),device=device)
+            encoded_chargrid = encoded_chargrid.scatter_(1, chargrid.unsqueeze(1), 1)
             #Chargrid Creation 
             # for batch_id in range(labels.shape[0]):
             #     for label_id in range(n_label[batch_id].item()):
@@ -809,7 +819,7 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
 
             
 
-            output = model(image, question, q_len, chargrid)
+            output = model(image, question, q_len, encoded_chargrid)
             argmax_output = output.data.cpu().numpy().argmax(1)
             numpy_answer = answer.numpy()
             correct = argmax_output == numpy_answer

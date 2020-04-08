@@ -120,13 +120,9 @@ class DVQA(Dataset):
 
         #Chargrid: load vectorizer
         #self.vectorizer = load_vectorizer(os.path.join(root,"dvqa_bag_of_characters.pkl"))
-        
-        ##self.bb = h5py.File(os.path.join(root, self.split + '_bboxes.hdf5'), 'r')
-        ##self.bboxes = self.bb['emb_bboxes']
-        ##self.bbox_len = self.bb['emb_bboxes_len']
-
-        self.c = h5py.File(os.path.join(root, self.split + '_chargrid_yes_no.h5py'), 'r')
-        self.chargrids = self.c['chargrid']
+        self.bb = h5py.File(os.path.join(root, self.split + '_bboxes.hdf5'), 'r')
+        self.bboxes = self.bb['emb_bboxes']
+        self.bbox_len = self.bb['emb_bboxes_len']
 
 
 
@@ -210,12 +206,10 @@ class DVQA(Dataset):
         
         # n_label,n_dim = emb_labels.shape
 
-        ##n_bbox = torch.tensor(self.bbox_len[index])
-        ##torch_bboxes = torch.tensor(self.bboxes[index,:n_bbox])
-        chargrid = torch.tensor(self.chargrids[index])
+        n_bbox = torch.tensor(self.bbox_len[index])
+        torch_bboxes = torch.tensor(self.bboxes[index,:n_bbox])
 
-        ##return img, question, len(question), answer, question_class, torch_bboxes, n_bbox, index  # answer_class
-        return img, question, len(question), answer, question_class, chargrid, index
+        return img, question, len(question), answer, question_class, torch_bboxes, n_bbox, index  # answer_class
 
     def __len__(self):
         return len(self.data)
@@ -225,10 +219,8 @@ def collate_data(batch):
     
 
     images, lengths, answers, question_class = [], [], [], []
-    ##bbox_batch,bbox_len_batch = [],[]
-    
+    bbox_batch,bbox_len_batch = [],[]
     batch_size = len(batch)
-    chargrid_batch = torch.zeros((batch_size,224,224),dtype=torch.long)
     # max_labels = max([entry[7] for entry in batch])
     # max_label_dim = batch[0][5].shape[-1]
 
@@ -247,8 +239,7 @@ def collate_data(batch):
 
     for i, b in enumerate(sort_by_len):
         #Chargrid: collate labels/bboxes 
-        ##image, question, length, answer, class_, bboxes, n_bbox, index = b  # destructure a batch's data
-        image, question, length, answer, class_, chargrid, index = b
+        image, question, length, answer, class_, bboxes, n_bbox, index = b  # destructure a batch's data
         images.append(image)
         length = len(question)
         questions[i, :length] = question
@@ -256,9 +247,8 @@ def collate_data(batch):
         answers.append(answer)
         question_class.append(class_)
 
-        ##bbox_batch.append(bboxes)
-        ##bbox_len_batch.append(torch.tensor([i]).repeat(n_bbox))
-        chargrid_batch[i] = chargrid
+        bbox_batch.append(bboxes)
+        bbox_len_batch.append(torch.tensor([i]).repeat(n_bbox))
 
         # bboxes = np.clip(bboxes,a_min=0,a_max=224)
 
@@ -269,7 +259,6 @@ def collate_data(batch):
 
     return torch.stack(images), torch.from_numpy(questions), \
            lengths, torch.LongTensor(answers), question_class, \
-           chargrid_batch, img_ids
-           ##torch.cat(bbox_batch).long(),torch.cat(bbox_len_batch),img_ids 
+            torch.cat(bbox_batch).long(),torch.cat(bbox_len_batch),img_ids 
            #batch_labels, batch_bboxes, batch_n_labels, img_ids 
            

@@ -14,7 +14,7 @@ from torchvision import transforms
 import sys
 import json
 sys.path.append('/workspace/st_vqa_entitygrid/solution/')
-#sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
+sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
 from dvqa import get_labels_and_bboxes
 from figureqa import load_vectorizer
 

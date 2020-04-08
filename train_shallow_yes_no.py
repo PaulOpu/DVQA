@@ -19,7 +19,6 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import textwrap
-import seaborn as sns
 
 #sys.path.append('/workspace/st_vqa_entitygrid/solution/')
 sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
@@ -1021,7 +1020,7 @@ if __name__ == '__main__':
             checkpoint_name = f'checkpoint/checkpoint_{sys.argv[3]}_{str(epoch + 1).zfill(3)}.model'
             with open(checkpoint_name, 'wb') as f:
                 torch.save(model.state_dict(), f)
-            pickle.dump(prediction,open(f"/workspace/DVQA/predictions/prediction_{sys.argv[3]}_{epoch}.pkl","wb"))
+            pickle.dump(prediction,open(f"predictions/prediction_{sys.argv[3]}_{epoch}.pkl","wb"))
         
         print("model saved! epoch=", epoch)
 

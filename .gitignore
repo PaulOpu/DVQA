@@ -7,3 +7,5 @@ predictions/
 checkpoint_dump/
 old_log/
 scores/
+old_predictions/
+old_scores/

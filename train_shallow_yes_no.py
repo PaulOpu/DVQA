@@ -367,12 +367,12 @@ class SANVQA(nn.Module):
         chargrid_resnet = torchvision.models.resnet101(
             pretrained=False)
         chargrid_modules = list(chargrid_resnet.children())[:-6]
-        chargrid_modules[0] = nn.Conv2d(10, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
         chargrid_modules[0:0] = [
-            nn.Conv2d(45,10,1,1,0),
+            nn.Conv2d(41,10,1,1,0),
             nn.BatchNorm2d(10),
             act_f
             ]
+        chargrid_modules[3] = nn.Conv2d(10, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
 
         self.chargrid_net = nn.Sequential(*chargrid_modules)
 
@@ -395,10 +395,10 @@ class SANVQA(nn.Module):
         self.dropout = nn.Dropout(
             p=dropout_rate)  # insert Dropout layers after convolutional layers that you’re going to fine-tune
 
-        self.attention = Attention(conv_output_size, lstm_hidden, mid_features=mid_feature, glimpses=glimpses, drop=0.5)
+        self.attention = Attention(2 * conv_output_size, lstm_hidden, mid_features=mid_feature, glimpses=glimpses, drop=0.5)
 
         self.mlp = nn.Sequential(self.dropout,  ## TODO: shall we eliminate this??
-                                 nn.Linear(conv_output_size * glimpses + lstm_hidden,
+                                 nn.Linear(2 * conv_output_size * glimpses + lstm_hidden,
                                            mlp_hidden_size),
                                  nn.ReLU(),
                                  self.dropout,
@@ -411,8 +411,8 @@ class SANVQA(nn.Module):
         conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
         
         #Chargrid here and 2 * 64
-        #chargrid = self.chargrid_net(chargrid)
-        #conv_out = torch.cat([conv_out,chargrid],1)
+        chargrid = self.chargrid_net(chargrid)
+        conv_out = torch.cat([conv_out,chargrid],1)
 
         conv_out = self.entitygrid_net(conv_out)
         # normalize by feature map, why need it and why not??
@@ -479,6 +479,25 @@ class SANVQA(nn.Module):
             print(p.requires_grad, "p.requires_grad")
             p.requires_grad = True
 
+def chargrid_creation(bboxes,n_bboxes,device,batch_size):
+    #batch_size = labels.shape[0]
+    #n_channel = labels.shape[-1]
+    n_channel = 41 #onehotencoding
+
+    onehot_labels = torch.zeros((len(bboxes), n_channel),device=device).zero_()
+    onehot_labels = onehot_labels.scatter_(1, torch.unsqueeze(bboxes[:,0],1), 1)
+
+    chargrid = torch.zeros((batch_size,n_channel,224,224),device=device)
+
+    #bboxes[:,1:] = torch.min(bboxes[:,1:],torch.tensor([224],dtype=torch.long,device=device))
+    bboxes[:,1:] = torch.clamp(bboxes[:,1:],0,224)
+
+    for i,(_,x,y,x2,y2) in enumerate(bboxes):
+        tiled_onehot_label = onehot_labels[i].repeat((x2-x,y2-y,1)).transpose(2,0)
+        chargrid[n_bboxes[i],:,y:y2,x:x2] = tiled_onehot_label
+
+    return chargrid
+
 def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_image=True, model_name=None):
     run_name = "train"
     model.train(True)  # train mode
@@ -516,38 +535,31 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     print(device)
     print(next(model.parameters()).is_cuda, "next(model.parameters()).is_cuda")
     #Chargrid load labels,bboxes
-    for i, (image, question, q_len, answer, question_class, labels, bboxes, n_label, data_index) in enumerate(pbar):
+    for i, (image, question, q_len, answer, question_class, bboxes, n_bboxes, data_index) in enumerate(pbar):
 
-
-        start.record()
-        image, question, q_len, answer,labels,bboxes,n_label = (
+        image, question, q_len, answer, bboxes = (
             image.to(device),
             question.to(device),
             torch.tensor(q_len),
             answer.to(device),
-            labels.to(device),
-            bboxes,#bboxes.to(device),
-            n_label
+            bboxes.to(device)
         )
         #end.record()
-        #torch.cuda.synchronize()
-        #print("Loading: ",start.elapsed_time(end))
-        #start.record()
+        tmp_batch_size = question.shape[0]
         #Chargrid: Creation
-        batch_size = labels.shape[0]
-        n_channel = labels.shape[-1]
-        chargrid = torch.zeros((batch_size,n_channel,224,224),device=torch.get_device(labels))
-        #create chargrid on the fly
-        #start = time.time()
-        for batch_id in range(labels.shape[0]):
-            for label_id in range(n_label[batch_id].item()):
-                x,y,x2,y2 = bboxes[batch_id,label_id,:]
-                label_box = labels[batch_id,label_id].repeat((x2-x,y2-y,1)).transpose(2,0)
-                chargrid[batch_id,:,y:y2,x:x2] = label_box
+        chargrid = chargrid_creation(bboxes,n_bboxes,question.get_device(),tmp_batch_size)
+        # batch_size = labels.shape[0]
+        # n_channel = labels.shape[-1]
+        # chargrid = torch.zeros((batch_size,n_channel,224,224),device=torch.get_device(labels))
+        # #create chargrid on the fly
 
-        #end.record()
-        #torch.cuda.synchronize()
-        #print("Chargrid: ",start.elapsed_time(end))
+        # for batch_id in range(labels.shape[0]):
+        #     for label_id in range(n_label[batch_id].item()):
+        #         x,y,x2,y2 = bboxes[batch_id,label_id,:]
+        #         label_box = labels[batch_id,label_id].repeat((x2-x,y2-y,1)).transpose(2,0)
+        #         chargrid[batch_id,:,y:y2,x:x2] = label_box
+
+
 
         model.zero_grad()
         output = model(image, question, q_len, chargrid)
@@ -774,26 +786,27 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
 
     with torch.no_grad():
 
-        for i, (image, question, q_len, answer, answer_class, labels, bboxes, n_label, data_index) in enumerate(tqdm(dataset)):
-            image, question, q_len, labels, bboxes, n_label = (
+        for i, (image, question, q_len, answer, answer_class, bboxes, n_bboxes, data_index) in enumerate(tqdm(dataset)):
+            image, question, q_len, bboxes = (
                 image.to(device),
                 question.to(device),
                 torch.tensor(q_len),
-                labels.to(device),
-                bboxes,#bboxes.to(device),
-                n_label
+                bboxes.to(device)
             )
 
-            batch_size = labels.shape[0]
-            n_channel = labels.shape[-1]
-            chargrid = torch.zeros((batch_size,n_channel,224,224),device=torch.get_device(labels))
+            #batch_size = labels.shape[0]
+            #n_channel = labels.shape[-1]
+            tmp_batch_size = question.shape[0]
+            chargrid = chargrid_creation(bboxes,n_bboxes,question.get_device(),tmp_batch_size)
 
             #Chargrid Creation 
-            for batch_id in range(labels.shape[0]):
-                for label_id in range(n_label[batch_id].item()):
-                    x,y,x2,y2 = bboxes[batch_id,label_id,:]
-                    label_box = labels[batch_id,label_id].repeat((x2-x,y2-y,1)).transpose(2,0)
-                    chargrid[batch_id,:,y:y2,x:x2] = label_box
+            # for batch_id in range(labels.shape[0]):
+            #     for label_id in range(n_label[batch_id].item()):
+            #         x,y,x2,y2 = bboxes[batch_id,label_id,:]
+            #         label_box = labels[batch_id,label_id].repeat((x2-x,y2-y,1)).transpose(2,0)
+            #         chargrid[batch_id,:,y:y2,x:x2] = label_box
+
+            
 
             output = model(image, question, q_len, chargrid)
             argmax_output = output.data.cpu().numpy().argmax(1)

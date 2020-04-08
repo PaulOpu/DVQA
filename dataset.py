@@ -119,7 +119,14 @@ class DVQA(Dataset):
         self.id2metadata = json.load(open(os.path.join(root, f"{split}_id2metadata.json"),"r"))
 
         #Chargrid: load vectorizer
-        self.vectorizer = load_vectorizer(os.path.join(root,"dvqa_bag_of_characters.pkl"))
+        #self.vectorizer = load_vectorizer(os.path.join(root,"dvqa_bag_of_characters.pkl"))
+        self.bb = h5py.File(os.path.join(root, self.split + '_bboxes.hdf5'), 'r')
+        self.bboxes = self.bb['emb_bboxes']
+        self.bbox_len = self.bb['emb_bboxes_len']
+
+
+
+
 
     def __getitem__(self, index):
         hdf5_idx_for_this_image, imgfile, question, answer, question_type = self.data[
@@ -187,26 +194,22 @@ class DVQA(Dataset):
         if self.reverse_question:  # TODO: test this variant for QUES model
             question = question[::-1]
 
-        #Chargrid: get labels/bboxes and vectorize
-        metadata = self.id2metadata[imgfile]
-        labels,bboxes = get_labels_and_bboxes(metadata)
-        torch_bboxes = torch.tensor(bboxes)
+        # #Chargrid: get labels/bboxes and vectorize
+        # metadata = self.id2metadata[imgfile]
+        # labels,bboxes = get_labels_and_bboxes(metadata)
+        # torch_bboxes = torch.tensor(bboxes)
         
-        emb_labels = self.vectorizer.transform(labels).toarray()
-        #normalized chargrid
-        label_sum = np.sum(emb_labels,1)
-        torch_labels = torch.tensor(emb_labels / label_sum[:, np.newaxis])
+        # emb_labels = self.vectorizer.transform(labels).toarray()
+        # #normalized chargrid
+        # label_sum = np.sum(emb_labels,1)
+        # torch_labels = torch.tensor(emb_labels / label_sum[:, np.newaxis])
         
-        n_label,n_dim = emb_labels.shape
+        # n_label,n_dim = emb_labels.shape
 
-        #max number of labels/bboxes = 25
-        #tensor_labels = torch.zeros((25,n_dim))
-        #tensor_labels[:n_label] = torch.tensor(emb_labels)
+        n_bbox = torch.tensor(self.bbox_len[index])
+        torch_bboxes = torch.tensor(self.bboxes[index,:n_bbox])
 
-        #tensor_bboxes = torch.zeros((25,4))
-        #tensor_bboxes[:n_label] = torch.tensor(bboxes)
-        
-        return img, question, len(question), answer, question_class, torch_labels, torch_bboxes, n_label, index  # answer_class
+        return img, question, len(question), answer, question_class, torch_bboxes, n_bbox, index  # answer_class
 
     def __len__(self):
         return len(self.data)
@@ -216,14 +219,17 @@ def collate_data(batch):
     
 
     images, lengths, answers, question_class = [], [], [], []
-
+    bbox_batch,bbox_len_batch = [],[]
     batch_size = len(batch)
-    max_labels = max([entry[7] for entry in batch])
-    max_label_dim = batch[0][5].shape[-1]
+    # max_labels = max([entry[7] for entry in batch])
+    # max_label_dim = batch[0][5].shape[-1]
 
-    batch_labels = torch.zeros((batch_size,max_labels,max_label_dim))
-    batch_bboxes = np.zeros((batch_size,max_labels,4),int)#torch.zeros((batch_size,max_labels,4))
-    batch_n_labels = torch.zeros((batch_size),dtype=torch.int32)
+    # batch_labels = torch.zeros((batch_size,max_labels,max_label_dim))
+    # batch_bboxes = np.zeros((batch_size,max_labels,4),int)#torch.zeros((batch_size,max_labels,4))
+    # batch_n_labels = torch.zeros((batch_size),dtype=torch.int32)
+
+
+
     img_ids = torch.zeros((batch_size))
 
     max_len = max(map(lambda x: len(x[1]), batch))
@@ -233,7 +239,7 @@ def collate_data(batch):
 
     for i, b in enumerate(sort_by_len):
         #Chargrid: collate labels/bboxes 
-        image, question, length, answer, class_, labels, bboxes, n_label, index = b  # destructure a batch's data
+        image, question, length, answer, class_, bboxes, n_bbox, index = b  # destructure a batch's data
         images.append(image)
         length = len(question)
         questions[i, :length] = question
@@ -241,13 +247,18 @@ def collate_data(batch):
         answers.append(answer)
         question_class.append(class_)
 
-        bboxes = np.clip(bboxes,a_min=0,a_max=224)
+        bbox_batch.append(bboxes)
+        bbox_len_batch.append(torch.tensor([i]).repeat(n_bbox))
 
-        batch_labels[i,:n_label,:] = labels
-        batch_bboxes[i,:n_label,:] = bboxes
-        batch_n_labels[i] = n_label
+        # bboxes = np.clip(bboxes,a_min=0,a_max=224)
+
+        # batch_labels[i,:n_label,:] = labels
+        # batch_bboxes[i,:n_label,:] = bboxes
+        # batch_n_labels[i] = n_label
         img_ids[i] = index
 
     return torch.stack(images), torch.from_numpy(questions), \
            lengths, torch.LongTensor(answers), question_class, \
-           batch_labels, batch_bboxes, batch_n_labels, img_ids
+            torch.cat(bbox_batch).long(),torch.cat(bbox_len_batch),img_ids 
+           #batch_labels, batch_bboxes, batch_n_labels, img_ids 
+           

@@ -50,23 +50,39 @@ class TensorBoardVisualize():
                 chart, images, global_step=x, 
                 walltime=None, dataformats='NCHW')
 
+    # def add_conv2(self,x,module,chart,hook_name,mask,n_act,suffix=""):
+
+    #     #weights and gradients
+    #     weights = module.weight.data.cpu().numpy()
+    #     gradients = module.weight.grad.cpu().numpy()
+    #     self.append_histogram(x, weights.reshape(-1), f"{chart}_weights")
+    #     self.append_histogram(x, gradients.reshape(-1), f"{chart}_gradients")
+
+    #     #need hook
+    #     act_hook = self.hooks[hook_name]
+    #     act = act_hook.get_features()[mask][:n_act].mean(1,keepdim=True).cpu()
+    #     self.add_images(
+    #        x,
+    #        act,
+    #        f"{chart}_activations{suffix}")
+
     def add_conv2(self,x,module,chart,hook_name,mask,n_act,suffix=""):
 
         #weights and gradients
         weights = module.weight.data.cpu().numpy()
         gradients = module.weight.grad.cpu().numpy()
-        self.append_histogram(x, weights.reshape(-1), f"{chart}/weights")
-        self.append_histogram(x, gradients.reshape(-1), f"{chart}/gradients")
+        self.append_histogram(x, weights.reshape(-1), f"{chart}_weights")
+        self.append_histogram(x, gradients.reshape(-1), f"{chart}_gradients")
 
         #need hook
         act_hook = self.hooks[hook_name]
-        act = act_hook.get_features()[mask][:n_act].sum(1,keepdim=True).cpu()
+        act = act_hook.get_features()[mask][0].unsqueeze(1).cpu()
         self.add_images(
            x,
            act,
-           f"{chart}/activations{suffix}")
+           f"{chart}_act_first_image{suffix}")
 
-    def add_figure_with_question(self,x,image,question,answer,output,chart,suffix=""):
+    def add_figure_with_question(self,x,image,question,answer,output,index,chart,suffix=""):
         norm_img = mpl.colors.Normalize(vmin=-1,vmax=1)
         visu_question = self.word_vect(question)
         visu_answer = self.answer_vect(answer)
@@ -81,7 +97,7 @@ class TensorBoardVisualize():
                 norm_img(np.transpose(image[idx],[1,2,0])),
                 vmin=0.,vmax=1.)
             a.text(0, 0, textwrap.fill(
-                    " ".join(visu_question[idx]) + f"Answer/Output: {visu_answer[idx]}/{visu_output[idx]}",
+                    f"{index[idx]}: " + " ".join(visu_question[idx]) + f"Answer/Output: {visu_answer[idx]}/{visu_output[idx]}",
                     60),wrap=True,ha='left',va='bottom')
 
             figures.append(fig)

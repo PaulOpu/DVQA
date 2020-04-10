@@ -46,21 +46,14 @@ data_parallel = False
 lr_step = 20
 lr_gamma = 2  # gamma (float) – Multiplicative factor of learning rate decay. Default: 0.1.
 weight_decay = 1e-4
-n_epoch = 4000
+n_epoch = 1200
 reverse_question = False
 batch_size = 128#(64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
 n_workers = 0 #0  # 4
 clip_norm = 50
 load_image = False
 
-#Saving Parameters (every 
-saving_epoch = 1
-train_progress_iteration = 2
-train_visualization_iteration = 50
-validation_epoch = 1
 
-#Label Encoder
-n_label_channels = 41
 
 
 class Attention(nn.Module):  # SANVQAbeta
@@ -342,11 +335,10 @@ class SANVQA(nn.Module):
 
         #just concat
         conv_output_size  = 64 #* 2 #2048
-        lstm_hidden = 16 #512
-        mid_feature = 16 #512
-        mlp_hidden_size = 16 # 1024
-        embed_hidden = 50
-        glimpses = 1
+        lstm_hidden = 32 #512
+        mid_feature = 32 #512
+        mlp_hidden_size = 32 # 1024
+        embed_hidden = 150
 
         self.n_class = n_class
         self.embed = nn.Embedding(n_vocab, embed_hidden)
@@ -360,8 +352,7 @@ class SANVQA(nn.Module):
         # pretrained ImageNet ResNet-101, use the output of final convolutional layer after pooling
         #Debug: Shallow 
         modules = list(resnet.children())[:-6]#:-2]
-        modules[0] = nn.Conv2d(3, conv_output_size, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-        modules[1] = nn.BatchNorm2d(conv_output_size)
+        
 
         # modules = list(resnet.children())[:-1]  # including AvgPool2d, 051019 afternoon by Xin
 
@@ -371,12 +362,12 @@ class SANVQA(nn.Module):
         chargrid_resnet = torchvision.models.resnet101(
             pretrained=False)
         chargrid_modules = list(chargrid_resnet.children())[:-6]
+        chargrid_modules[0] = nn.Conv2d(10, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
         chargrid_modules[0:0] = [
-            nn.Conv2d(41,10,1,1,0),
+            nn.Conv2d(45,10,1,1,0),
             nn.BatchNorm2d(10),
             act_f
             ]
-        chargrid_modules[3] = nn.Conv2d(10, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
 
         self.chargrid_net = nn.Sequential(*chargrid_modules)
 
@@ -399,10 +390,10 @@ class SANVQA(nn.Module):
         self.dropout = nn.Dropout(
             p=dropout_rate)  # insert Dropout layers after convolutional layers that you’re going to fine-tune
 
-        self.attention = Attention(2 * conv_output_size, lstm_hidden, mid_features=mid_feature, glimpses=glimpses, drop=0.5)
+        self.attention = Attention(conv_output_size, lstm_hidden, mid_features=mid_feature, glimpses=glimpses, drop=0.5)
 
         self.mlp = nn.Sequential(self.dropout,  ## TODO: shall we eliminate this??
-                                 nn.Linear(2 * conv_output_size * glimpses + lstm_hidden,
+                                 nn.Linear(conv_output_size * glimpses + lstm_hidden,
                                            mlp_hidden_size),
                                  nn.ReLU(),
                                  self.dropout,
@@ -415,8 +406,8 @@ class SANVQA(nn.Module):
         conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
         
         #Chargrid here and 2 * 64
-        chargrid = self.chargrid_net(chargrid)
-        conv_out = torch.cat([conv_out,chargrid],1)
+        #chargrid = self.chargrid_net(chargrid)
+        #conv_out = torch.cat([conv_out,chargrid],1)
 
         conv_out = self.entitygrid_net(conv_out)
         # normalize by feature map, why need it and why not??
@@ -483,45 +474,22 @@ class SANVQA(nn.Module):
             print(p.requires_grad, "p.requires_grad")
             p.requires_grad = True
 
-def chargrid_creation(bboxes,n_bboxes,device,batch_size):
-    #batch_size = labels.shape[0]
-    #n_channel = labels.shape[-1]
-    n_channel = 41 #onehotencoding
-
-    onehot_labels = torch.zeros((len(bboxes), n_channel),device=device).zero_()
-    onehot_labels = onehot_labels.scatter_(1, torch.unsqueeze(bboxes[:,0],1), 1)
-
-    chargrid = torch.zeros((batch_size,n_channel,224,224),device=device)
-
-    #bboxes[:,1:] = torch.min(bboxes[:,1:],torch.tensor([224],dtype=torch.long,device=device))
-    bboxes[:,1:] = torch.clamp(bboxes[:,1:],0,224)
-
-    for i,(_,x,y,x2,y2) in enumerate(bboxes):
-        tiled_onehot_label = onehot_labels[i].repeat((x2-x,y2-y,1)).transpose(2,0)
-        chargrid[n_bboxes[i],:,y:y2,x:x2] = tiled_onehot_label
-
-    return chargrid
-
 def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_image=True, model_name=None):
     run_name = "train"
     model.train(True)  # train mode
-    if isinstance(model,nn.DataParallel):
-        vqa_model = model.module
-    else:
-        vqa_model = model
 
     dataset = iter(train_set)
     #Debug
-    pbar = tqdm(dataset)
-    #pbar = dataset
+    #pbar = tqdm(dataset)
+    pbar = dataset
     n_batch = len(pbar)
     moving_loss = 0  # it will change when loop over data
 
     #Chargrid: Visualize
-    attention_map = SaveFeatures(vqa_model.attention)
-    chargrid_act1 = SaveFeatures(vqa_model.chargrid_net[0])
-    chargrid_act3 = SaveFeatures(vqa_model.chargrid_net[3])
-    img_act0 = SaveFeatures(vqa_model.resnet[0])
+    attention_map = SaveFeatures(model.attention)
+    chargrid_act1 = SaveFeatures(model.chargrid_net[0])
+    chargrid_act3 = SaveFeatures(model.chargrid_net[3])
+    img_act0 = SaveFeatures(model.resnet[0])
 
     tensorboard_client.register_hook("chargrid_act1",chargrid_act1)
     tensorboard_client.register_hook("chargrid_act3",chargrid_act3)
@@ -534,43 +502,44 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
 
-    
-
     print(device)
     print(next(model.parameters()).is_cuda, "next(model.parameters()).is_cuda")
     #Chargrid load labels,bboxes
-    ##for i, (image, question, q_len, answer, question_class, bboxes, n_bboxes, data_index) in enumerate(pbar):
-    for i, (image, question, q_len, answer, question_class, chargrid, data_index) in enumerate(pbar):
+    for i, (image, question, q_len, answer, question_class, labels, bboxes, n_label, data_index) in enumerate(pbar):
 
-        image, question, q_len, answer, chargrid = (##bboxes = (
+
+        start.record()
+        image, question, q_len, answer,labels,bboxes,n_label = (
             image.to(device),
             question.to(device),
             torch.tensor(q_len),
             answer.to(device),
-            ##bboxes.to(device)
-            chargrid.to(device)
+            labels.to(device),
+            bboxes,#bboxes.to(device),
+            n_label
         )
         #end.record()
-        tmp_batch_size = question.shape[0]
+        #torch.cuda.synchronize()
+        #print("Loading: ",start.elapsed_time(end))
+        #start.record()
         #Chargrid: Creation
-        ##chargrid = chargrid_creation(bboxes,n_bboxes,question.get_device(),tmp_batch_size)
-        encoded_chargrid = torch.zeros((tmp_batch_size, n_label_channels,224,224),device=device)
-        encoded_chargrid = encoded_chargrid.scatter_(1, chargrid.unsqueeze(1), 1)
-        # batch_size = labels.shape[0]
-        # n_channel = labels.shape[-1]
-        # chargrid = torch.zeros((batch_size,n_channel,224,224),device=torch.get_device(labels))
-        # #create chargrid on the fly
+        batch_size = labels.shape[0]
+        n_channel = labels.shape[-1]
+        chargrid = torch.zeros((batch_size,n_channel,224,224),device=torch.get_device(labels))
+        #create chargrid on the fly
+        #start = time.time()
+        for batch_id in range(labels.shape[0]):
+            for label_id in range(n_label[batch_id].item()):
+                x,y,x2,y2 = bboxes[batch_id,label_id,:]
+                label_box = labels[batch_id,label_id].repeat((x2-x,y2-y,1)).transpose(2,0)
+                chargrid[batch_id,:,y:y2,x:x2] = label_box
 
-        # for batch_id in range(labels.shape[0]):
-        #     for label_id in range(n_label[batch_id].item()):
-        #         x,y,x2,y2 = bboxes[batch_id,label_id,:]
-        #         label_box = labels[batch_id,label_id].repeat((x2-x,y2-y,1)).transpose(2,0)
-        #         chargrid[batch_id,:,y:y2,x:x2] = label_box
-
-
+        #end.record()
+        #torch.cuda.synchronize()
+        #print("Chargrid: ",start.elapsed_time(end))
 
         model.zero_grad()
-        output = model(image, question, q_len, encoded_chargrid)
+        output = model(image, question, q_len, chargrid)
         #end.record()
         #torch.cuda.synchronize()
         #print("Forward: ",start.elapsed_time(end))
@@ -584,8 +553,8 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
         #torch.cuda.synchronize()
         #print("Backward: ",start.elapsed_time(end))
         #start.record()
-        item_correct = output.data.cpu().numpy().argmax(1) == answer.data.cpu().numpy()
-        correct = item_correct.sum() / batch_size
+        correct = output.data.cpu().numpy().argmax(1) == answer.data.cpu().numpy()
+        correct = correct.sum() / batch_size
 
         if moving_loss == 0:
             moving_loss = correct
@@ -610,7 +579,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
 
             
         
-        if (("IMG" in model_name) or ("SAN" in model_name)) and i % 10 == 0 and i != 0:
+        if (("IMG" in model_name) or ("SAN" in model_name)) and i % 10000 == 0 and i != 0 and 1 == 0:
             # valid(epoch + float(i * batch_size / 2325316), model_name=model_name, val_split="val_easy",
             #       load_image=load_image)
             valid(epoch + float(i * batch_size / 2325316),tensorboard_client,global_iteration, valid_set_easy, model_name=model_name,
@@ -620,67 +589,51 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
 
         #Chargrid: visualize
         visualize_train(
-            global_iteration,run_name,tensorboard_client,
-            loss,moving_loss)
+            global_iteration,run_name,model,tensorboard_client,
+            loss,moving_loss,attention_map)
 
-        #if global_iteration % 50 * batch_size == 0:
-        if global_iteration % train_visualization_iteration == 0:
+        if global_iteration % 30 == 0:
+        
+            #Image Layer
+            visu_net = model.resnet
+            tensorboard_client.add_conv2(
+                global_iteration,
+                visu_net[0],
+                "Image_Conv1",
+                "img_act0",
+                16
+            )
 
+            #Input
+            visu_img = image[:16].cpu().numpy()
+            visu_question = question[:16].cpu().numpy()
+            visu_answer = answer[:16].cpu().numpy()
+            visu_output = output[:16].data.cpu().numpy().argmax(1)
 
-            #Visualize Input divided by correctness
-            for is_correct,correct_class in [(True,"correct"),(False,"incorrect")]:
-                select_mask = item_correct == is_correct
-                n_pictures = min(np.sum(select_mask),8)
-                if n_pictures != 0:
+            tensorboard_client.add_figure_with_question(
+                global_iteration,
+                visu_img,
+                visu_question,
+                visu_answer,
+                visu_output,
+                "Input")
 
-                    #Image Layer
-                    visu_net = vqa_model.resnet
-                    tensorboard_client.add_conv2(
-                        global_iteration,
-                        visu_net[0],
-                        "Image_Conv1",
-                        "img_act0",
-                        select_mask,
-                        n_pictures,
-                        f"_{correct_class}"
-                    )
+            #Attention
+            #attention_features = F.pad(attention_map.features[:16].detach().cpu(),(2,2,2,2))
+            attention_features = attention_map.features[:16].detach().cpu()     
+            glimpses = attention_features.size(1)
+            attention_features = attention_features.view(16, glimpses, -1)
+            attention_features = F.softmax(attention_features, dim=-1).unsqueeze(2)
+            att1,att2 = torch.split(attention_features,1,1)
 
-                    visu_img = image[select_mask][:n_pictures].cpu().numpy()
-                    visu_question = question[select_mask][:n_pictures].cpu().numpy()
-                    visu_answer = answer[select_mask][:n_pictures].cpu().numpy()
-                    visu_output = output[select_mask][:n_pictures].data.cpu().numpy().argmax(1)
-
-                    tensorboard_client.add_figure_with_question(
-                        global_iteration,
-                        visu_img,
-                        visu_question,
-                        visu_answer,
-                        visu_output,
-                        "Input",
-                        f"_{correct_class}")
-
-                    #Attention
-                    #attention_features = F.pad(attention_map.features[:16].detach().cpu(),(2,2,2,2))
-                    attention_features = attention_map.get_features()[select_mask][:n_pictures].detach().cpu()     
-                    glimpses = attention_features.size(1)
-                    grid_size = attention_features.size(2)
-                    attention_features = attention_features.view(n_pictures, glimpses, -1)
-                    #attention_features = F.softmax(attention_features, dim=-1).unsqueeze(2)
-                    attention_features = attention_features.view(n_pictures, glimpses, grid_size, grid_size)
-                    if glimpses == 2:
-                        att1,att2 = torch.split(attention_features,1,1)
-                        tensorboard_client.add_images(
-                            global_iteration,
-                            att2,
-                            f"Attention/glimps2_{correct_class}")
-                    else:
-                        att1 = attention_features
-
-                    tensorboard_client.add_images(
-                        global_iteration,
-                        att1,
-                        f"Attention/glimps1_{correct_class}")
-                    
+            tensorboard_client.add_images(
+                global_iteration,
+                att1,
+                "Batch/attention_glimps1")
+            tensorboard_client.add_images(
+                global_iteration,
+                att2,
+                "Batch/attention_glimps2")
 
 
             #Chargrid
@@ -710,7 +663,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
             #     visu_output,
             #     "Chargrid")
 
-        #Replace by batch_size
+
         global_iteration += 1
 
     #valid(epoch + float(i * batch_size / 2325316),tensorboard_client,global_iteration, train_set, model_name=model_name,
@@ -727,14 +680,14 @@ def visualize_weight_gradient(global_iteration,tensorboard_client,module,weight_
     tensorboard_client.append_histogram(global_iteration, weights.reshape(-1), weight_name)
     tensorboard_client.append_histogram(global_iteration, gradients.reshape(-1), gradient_name)
 
-def visualize_train(global_iteration,run_name,tensorboard_client,loss,moving_loss):
-    if (global_iteration % train_progress_iteration != 0):
+def visualize_train(global_iteration,run_name,model,tensorboard_client,loss,moving_loss,attention_map):
+    if global_iteration % 10 != 0:
         return
 
     # - loss
-    tensorboard_client.append_line(global_iteration,{"loss":loss.detach().item()},"Training/running_loss")
+    tensorboard_client.append_line(global_iteration,{"loss":loss.detach().item()},"Metrics/running_loss")
     # - accuracy
-    tensorboard_client.append_line(global_iteration,{run_name:moving_loss},"Training/accuracy")
+    tensorboard_client.append_line(global_iteration,{run_name:moving_loss},"Metrics/accuracy")
 
     
     
@@ -783,7 +736,7 @@ def visualize_train(global_iteration,run_name,tensorboard_client,loss,moving_los
      """
 
 def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True, model_name=None, val_split="val_easy"):
-    #run_name = val_split
+    run_name = val_split
     
     print("Inside validation ", epoch)
     dataset = iter(valid_set)
@@ -794,32 +747,28 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
 
     with torch.no_grad():
 
-        ##for i, (image, question, q_len, answer, answer_class, bboxes, n_bboxes, data_index) in enumerate(tqdm(dataset)):
-        for i, (image, question, q_len, answer, answer_class, chargrid, data_index) in enumerate(tqdm(dataset)):
-            image, question, q_len, chargrid = (
+        for i, (image, question, q_len, answer, answer_class, labels, bboxes, n_label, data_index) in enumerate(tqdm(dataset)):
+            image, question, q_len, labels, bboxes, n_label = (
                 image.to(device),
                 question.to(device),
                 torch.tensor(q_len),
-                ##bboxes.to(device)
-                chargrid.to(device)
+                labels.to(device),
+                bboxes,#bboxes.to(device),
+                n_label
             )
 
-            #batch_size = labels.shape[0]
-            #n_channel = labels.shape[-1]
-            tmp_batch_size = question.shape[0]
-            ##chargrid = chargrid_creation(bboxes,n_bboxes,question.get_device(),tmp_batch_size)
-            encoded_chargrid = torch.zeros((tmp_batch_size, n_label_channels,224,224),device=device)
-            encoded_chargrid = encoded_chargrid.scatter_(1, chargrid.unsqueeze(1), 1)
+            batch_size = labels.shape[0]
+            n_channel = labels.shape[-1]
+            chargrid = torch.zeros((batch_size,n_channel,224,224),device=torch.get_device(labels))
+
             #Chargrid Creation 
-            # for batch_id in range(labels.shape[0]):
-            #     for label_id in range(n_label[batch_id].item()):
-            #         x,y,x2,y2 = bboxes[batch_id,label_id,:]
-            #         label_box = labels[batch_id,label_id].repeat((x2-x,y2-y,1)).transpose(2,0)
-            #         chargrid[batch_id,:,y:y2,x:x2] = label_box
+            for batch_id in range(labels.shape[0]):
+                for label_id in range(n_label[batch_id].item()):
+                    x,y,x2,y2 = bboxes[batch_id,label_id,:]
+                    label_box = labels[batch_id,label_id].repeat((x2-x,y2-y,1)).transpose(2,0)
+                    chargrid[batch_id,:,y:y2,x:x2] = label_box
 
-            
-
-            output = model(image, question, q_len, encoded_chargrid)
+            output = model(image, question, q_len, chargrid)
             argmax_output = output.data.cpu().numpy().argmax(1)
             numpy_answer = answer.numpy()
             correct = argmax_output == numpy_answer
@@ -847,20 +796,19 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     #         w.write('{}: {:.5f}\n'.format(k, class_correct[k] / v))
     #     # TODO: save the model here!
 
-    total_score = class_correct['total'] / class_total['total']
-    print('Avg Acc: {:.5f}'.format(total_score))
+    print('Avg Acc: {:.5f}'.format(class_correct['total'] / class_total['total']))
 
-    visualize_val(global_iteration,model,tensorboard_client,val_split,class_total,class_correct)
+    visualize_val(global_iteration,run_name,model,tensorboard_client,val_split,class_total,class_correct)
 
-    return prediction,total_score
+    return prediction
 
-def visualize_val(global_iteration,model,tensorboard_client,val_split,class_total,class_correct):
+def visualize_val(global_iteration,run_name,model,tensorboard_client,val_split,class_total,class_correct):
     chart_dic = {k:class_correct[k] / v
         for k, v in class_total.items()
     }
     tensorboard_client.append_line(
         global_iteration,chart_dic,
-            f"Evaluation/{val_split}_accuracy")
+            f"Metrics/{val_split}_accuracy")
 
 if __name__ == '__main__':
     data_path = sys.argv[1]
@@ -899,7 +847,6 @@ if __name__ == '__main__':
 
     elif model_name == "SANVQA" or "SANVQAbeta":
         model = SANVQA(n_answers, n_vocab=n_words, encoded_image_size=(14 if load_from_hdf5 == False else 7))
-        #model = nn.DataParallel(model)
         load_image = True
         model = model.to(device)
 
@@ -928,15 +875,15 @@ if __name__ == '__main__':
     valid_set_easy = DataLoader(
         DVQA(
             sys.argv[1],
-            "val_easy",
+            "train",
             transform=None,
             reverse_question=reverse_question,
             use_preprocessed=True,
             load_image=load_image,
             load_from_hdf5=load_from_hdf5,
-            file_name=sys.argv[6]
+            file_name=sys.argv[5]
         ),
-        batch_size=batch_size,# // 2,
+        batch_size=batch_size // 2,
         num_workers=n_workers,
         collate_fn=collate_data,  ## shuffle=False
 
@@ -956,19 +903,15 @@ if __name__ == '__main__':
         num_workers=n_workers,
         collate_fn=collate_data,  ## shuffle=False
 
-    ) 
-    """
+    ) """
 
     #Chargrid: Create Tensorboard Writer
-    tensorboard_client = TensorBoardVisualize(sys.argv[3],"log/",dic,)
+    tensorboard_client = TensorBoardVisualize(sys.argv[3],"log/",dic)
     global_iteration = 0
 
     #Chargrid: Continue from Checkpoint
     checkpoint_epoch = int(sys.argv[4])
     start_epoch = 0
-    best_score = 0
-    score_file = f"scores/{sys.argv[3]}_best.txt"
-    best_score_list = []
     if checkpoint_epoch > 0:
         checkpoint_name = 'checkpoint/checkpoint_' + sys.argv[3] + '_{}.model'.format(str(checkpoint_epoch).zfill(3))
         #model.load_state_dict(torch.load(model.state_dict())
@@ -977,13 +920,6 @@ if __name__ == '__main__':
             torch.load(checkpoint_name, map_location='cuda'))
         global_iteration = len(train_set)*checkpoint_epoch
         start_epoch = checkpoint_epoch
-
-        if os.path.exists(score_file):
-            with open(score_file,"r") as f:
-                best_score_list = f.read().split("\n")
-            best_score = float(best_score_list[-1].split(",")[1])
-
-    
 
     for epoch in range(start_epoch,n_epoch+start_epoch):
         # if scheduler.get_lr()[0] < lr_max:
@@ -1005,30 +941,12 @@ if __name__ == '__main__':
             train_set.dataset.answer_class,
             load_image=load_image, model_name=model_name)
         #Debug
-        if (epoch % validation_epoch == 0):
-            #valid(epoch,tensorboard_client,global_iteration, train_set, model_name=model_name, load_image=load_image, val_split="train")
-            prediction,total_score = valid(epoch,tensorboard_client,global_iteration, valid_set_easy, model_name=model_name, load_image=load_image, val_split="val_easy")
+        prediction = valid(epoch,tensorboard_client,global_iteration, valid_set_easy, model_name=model_name, load_image=load_image, val_split="train")
 
         #valid(epoch,tensorboard_client,global_iteration, valid_set_hard, model_name=model_name, load_image=load_image, val_split="val_hard")
         tensorboard_client.close()
-
-        if total_score > best_score:
-            print(f"better score: {total_score:.5f}")
-            checkpoint_name = f'checkpoint/checkpoint_{sys.argv[3]}_best.model'
-            with open(checkpoint_name, 'wb') as f:
-                torch.save(model.state_dict(), f)
-
-            best_score_list.append(f"{epoch},{total_score:.5f}")
-            with open(score_file,"w") as f:
-                f.write("\n".join(best_score_list))
-
-            pickle.dump(prediction,open(f"predictions/prediction_{sys.argv[3]}_best.pkl","wb"))
-            
-            best_score = total_score
-
         
-        if (epoch % saving_epoch == 0):
-            checkpoint_name = f'checkpoint/checkpoint_{sys.argv[3]}_{str(epoch + 1).zfill(3)}.model'
+        if epoch % 50 == 0:
             with open(checkpoint_name, 'wb') as f:
                 torch.save(model.state_dict(), f)
             pickle.dump(prediction,open(f"/workspace/DVQA/predictions/prediction_{sys.argv[3]}_{epoch}.pkl","wb"))

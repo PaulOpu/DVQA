@@ -55,9 +55,9 @@ load_image = False
 
 #Saving Parameters (every 
 saving_epoch = 20
-train_progress_iteration = 1
+train_progress_iteration = 5
 train_visualization_iteration = 100
-validation_epoch = 1
+validation_epoch = 5
 
 #Label Encoder
 n_label_channels = 41
@@ -323,6 +323,108 @@ class SANVQA2(nn.Module):
             for p in c.parameters():
                 p.requires_grad = True
 
+class Conv2dBatchAct(torch.nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, act_f, stride=1, padding=0, dilation=1):
+        """
+        In the constructor we instantiate two nn.Linear modules and assign them as
+        member variables.
+        """
+        super(Conv2dBatchAct, self).__init__()
+        self.conv2d_batch_act = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, dilation),
+            nn.BatchNorm2d(out_channels),
+            act_f,
+        )
+
+    def forward(self, x):
+        """
+        In the forward function we accept a Tensor of input data and we must return
+        a Tensor of output data. We can use Modules defined in the constructor as
+        well as arbitrary operators on Tensors.
+        """
+        result = self.conv2d_batch_act(x)
+        return result
+
+class Chargrid_Encoder(torch.nn.Module):
+    def __init__(self, in_channels, act_f):
+        """
+        In the constructor we instantiate two nn.Linear modules and assign them as
+        member variables.
+        """
+        super(Chargrid_Encoder, self).__init__()
+
+        encoder_parameter_blocks= [
+            #in, out, stride, dilation
+            [in_channels,64,2,1], #a
+            [64,128,2,1], #a
+            [128,256,2,2], #a
+            [256,512,1,4], #a''
+            [512,512,1,8], #a''
+        ]
+
+        self.encoder_modules = nn.ModuleList()
+
+        for i,(in_ch,out_ch,stride,dilation) in enumerate(encoder_parameter_blocks):
+            self.encoder_modules.extend(nn.Sequential(
+                Conv2dBatchAct(in_ch,out_ch,3,act_f,stride,dilation,dilation), #C112
+                Conv2dBatchAct(out_ch,out_ch,3,act_f,1,dilation,dilation),
+                Conv2dBatchAct(out_ch,out_ch,3,act_f,1,dilation,dilation),
+                torch.nn.Dropout()
+                )
+            )
+
+        self.lateral_start = [3,7,11]
+        
+
+        decoder_parameter_blocks= [
+            #in, out, kernel, stride list, dilation
+            [256+512,256,"b"],
+            [256+128,128,"b"],
+            [128+64,64,"c"]
+        ]
+
+        self.decoder_modules = nn.ModuleList()
+
+        for i,(in_ch,out_ch,block_type) in enumerate(decoder_parameter_blocks):
+            curr_module = [
+                Conv2dBatchAct(in_ch,in_ch,1,act_f),
+                nn.ConvTranspose2d(in_ch,out_ch,3,2,1,1),
+                ]
+            
+            if block_type == "b":
+                curr_module += [
+                    Conv2dBatchAct(out_ch,out_ch,3,act_f,1,1),
+                    Conv2dBatchAct(out_ch,out_ch,3,act_f,1,1),
+                    torch.nn.Dropout()
+                ]
+
+            
+
+            self.decoder_modules.extend(nn.Sequential(*curr_module))
+            
+        self.lateral_end = [0,5,10]
+
+    def forward(self, x):
+        """
+        In the forward function we accept a Tensor of input data and we must return
+        a Tensor of output data. We can use Modules defined in the constructor as
+        well as arbitrary operators on Tensors.
+        """
+        encoder_results = []
+        for i,encoder_block in enumerate(self.encoder_modules):
+            x = encoder_block(x)
+            if i in self.lateral_start:
+                encoder_results.append(x)
+
+        curr_lateral = 0
+        for i,decoder_block in enumerate(self.decoder_modules):
+            if i in self.lateral_end:
+                x = torch.cat([x,encoder_results[2-curr_lateral]],dim=1)
+                curr_lateral += 1
+            x = decoder_block(x)
+        
+        return x
+
 class SANVQA(nn.Module):
     '''
     We implement SANVQA based on https://github.com/Cyanogenoid/pytorch-vqa.
@@ -343,10 +445,10 @@ class SANVQA(nn.Module):
         #just concat
         conv_output_size  = 64 #* 2 #2048
         lstm_hidden = 16 #512
-        mid_feature = 16 #512
-        mlp_hidden_size = 16 # 1024
+        mid_feature = 128 #512
+        mlp_hidden_size = 128 # 1024
         embed_hidden = 50
-        glimpses = 1
+        glimpses = 2
 
         self.n_class = n_class
         self.embed = nn.Embedding(n_vocab, embed_hidden)
@@ -368,6 +470,7 @@ class SANVQA(nn.Module):
         act_f = nn.ReLU()
 
         #Chargrid
+
         chargrid_resnet = torchvision.models.resnet101(
             pretrained=False)
         chargrid_modules = list(chargrid_resnet.children())[:-6]
@@ -377,7 +480,7 @@ class SANVQA(nn.Module):
             act_f
             ]
         chargrid_modules[3] = nn.Conv2d(10, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-
+        #chargrid_modules.append(Chargrid_Encoder(64,act_f))
         self.chargrid_net = nn.Sequential(*chargrid_modules)
 
         self.entitygrid_net = nn.Sequential(
@@ -520,7 +623,13 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     #Chargrid: Visualize
     attention_map = SaveFeatures(vqa_model.attention)
     chargrid_act1 = SaveFeatures(vqa_model.chargrid_net[0])
+    #chargrid_act1 = SaveFeatures(
+    #    vqa_model.chargrid_net[7].encoder_modules[0].conv2d_batch_act[0])
+
     chargrid_act3 = SaveFeatures(vqa_model.chargrid_net[3])
+    #chargrid_act3 = SaveFeatures(
+    #    vqa_model.chargrid_net[7].decoder_modules[-1])
+    
     img_act0 = SaveFeatures(vqa_model.resnet[0])
 
     tensorboard_client.register_hook("chargrid_act0",chargrid_act1)
@@ -640,8 +749,8 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
                         visu_img,
                         visu_question,
                         visu_answer,
+                        visu_output,
                         visu_data_index,
-                        data_index,
                         "Input",
                         f"_{correct_class}")
 
@@ -779,7 +888,8 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     model.eval()  # eval_mode
     class_correct = Counter()
     class_total = Counter()
-    prediction,answer_count = [],Counter()
+    losses,prediction,all_output_count,correct_output_count,all_answer_count = [],[],Counter(),Counter(),Counter()
+    
 
     with torch.no_grad():
 
@@ -809,8 +919,13 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
             
 
             output = model(image, question, q_len, encoded_chargrid)
-            argmax_output = output.data.cpu().numpy().argmax(1)
+            cpu_output = output.data.cpu()
+            loss = criterion(cpu_output, answer)
+            losses.append(loss.item())
+
+            argmax_output = cpu_output.numpy().argmax(1)
             numpy_answer = answer.numpy()
+            
             correct = argmax_output == numpy_answer
             for c, class_ in zip(correct, answer_class):
                 if c:  # if correct
@@ -819,7 +934,9 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
 
             prediction.append([data_index,numpy_answer,argmax_output])
 
-            answer_count.update(argmax_output)
+            all_output_count.update(argmax_output)
+            correct_output_count.update(argmax_output[correct])
+            all_answer_count.update(numpy_answer)
 
             if (("IMG" in model_name) or ("SAN" in model_name)) and type(epoch) == type(0.1) and (
                     i * batch_size // 2) > (
@@ -831,7 +948,11 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
 
     print("class_correct", class_correct)
     print("class_total", class_total)
-    print("answer_count", answer_count)
+    print("all_output_count", all_output_count)
+    print("correct_output_count", correct_output_count)
+    average_loss = sum(losses) / len(dataset)
+    print("average_loss", average_loss )
+    
 
     #Debug
     # with open('log/log_' + model_name + '_{}_'.format(round(epoch + 1, 4)) + val_split + '.txt', 'w') as w:
@@ -842,17 +963,41 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     total_score = class_correct['total'] / class_total['total']
     print('Avg Acc: {:.5f}'.format(total_score))
 
-    visualize_val(global_iteration,model,tensorboard_client,val_split,class_total,class_correct)
+    visualize_val(
+        global_iteration,tensorboard_client,val_split,
+        class_total,class_correct,average_loss,
+        correct_output_count,all_answer_count,all_output_count)
 
     return prediction,total_score
 
-def visualize_val(global_iteration,model,tensorboard_client,val_split,class_total,class_correct):
+def visualize_val(
+    global_iteration,tensorboard_client,val_split,
+    class_total,class_correct,average_loss,
+    correct_output_count,all_answer_count,all_output_count):
     chart_dic = {k:class_correct[k] / v
         for k, v in class_total.items()
     }
     tensorboard_client.append_line(
         global_iteration,chart_dic,
             f"Evaluation/{val_split}_accuracy")
+
+    tensorboard_client.append_line(
+        global_iteration,{"average_loss":average_loss},
+            f"Evaluation/{val_split}_avg_loss")
+
+    tensorboard_client.append_line(
+        global_iteration,{
+            str(key):correct_output_count[key]/all_answer_count[key] 
+            for key in all_answer_count.keys()},
+            f"Evaluation/{val_split}_correctness_per_answer")
+
+    tensorboard_client.append_line(
+        global_iteration,{
+            str(key):all_output_count[key] 
+            for key in all_answer_count.keys()},
+            f"Evaluation/{val_split}_pred_per_answer")
+    
+    
 
 if __name__ == '__main__':
     data_path = sys.argv[1]
@@ -1001,22 +1146,23 @@ if __name__ == '__main__':
             #valid(epoch,tensorboard_client,global_iteration, train_set, model_name=model_name, load_image=load_image, val_split="train")
             prediction,total_score = valid(epoch,tensorboard_client,global_iteration, valid_set_easy, model_name=model_name, load_image=load_image, val_split="val_easy")
 
+            if total_score > best_score:
+                print(f"better score: {total_score:.5f}")
+                checkpoint_name = f'checkpoint/checkpoint_{sys.argv[3]}_best.model'
+                with open(checkpoint_name, 'wb') as f:
+                    torch.save(model.state_dict(), f)
+
+                best_score_list.append(f"{epoch},{total_score:.5f}")
+                with open(score_file,"w") as f:
+                    f.write("\n".join(best_score_list))
+
+                pickle.dump(prediction,open(f"predictions/prediction_{sys.argv[3]}_best.pkl","wb"))
+                
+                best_score = total_score
         #valid(epoch,tensorboard_client,global_iteration, valid_set_hard, model_name=model_name, load_image=load_image, val_split="val_hard")
         tensorboard_client.close()
 
-        if total_score > best_score:
-            print(f"better score: {total_score:.5f}")
-            checkpoint_name = f'checkpoint/checkpoint_{sys.argv[3]}_best.model'
-            with open(checkpoint_name, 'wb') as f:
-                torch.save(model.state_dict(), f)
-
-            best_score_list.append(f"{epoch},{total_score:.5f}")
-            with open(score_file,"w") as f:
-                f.write("\n".join(best_score_list))
-
-            pickle.dump(prediction,open(f"predictions/prediction_{sys.argv[3]}_best.pkl","wb"))
-            
-            best_score = total_score
+        
 
         
         if (epoch % saving_epoch == 0):

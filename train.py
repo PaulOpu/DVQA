@@ -25,6 +25,8 @@ import seaborn as sns
 sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
 from dvqa import enlarge_batch_tensor
 from visualize import TensorBoardVisualize,SaveFeatures
+from sklearn.metrics import precision_recall_fscore_support
+
 
 
 
@@ -54,10 +56,10 @@ clip_norm = 50
 load_image = False
 
 #Saving Parameters (every 
-saving_epoch = 20
+saving_epoch = 1
 train_progress_iteration = 5
 train_visualization_iteration = 100
-validation_epoch = 5
+validation_epoch = 1
 
 #Label Encoder
 n_label_channels = 41
@@ -932,11 +934,11 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
                     class_correct[class_] += 1
                 class_total[class_] += 1
 
-            prediction.append([data_index,numpy_answer,argmax_output])
+            prediction.append([data_index.numpy(),numpy_answer,argmax_output])
 
-            all_output_count.update(argmax_output)
-            correct_output_count.update(argmax_output[correct])
-            all_answer_count.update(numpy_answer)
+            #all_output_count.update(argmax_output)
+            #correct_output_count.update(argmax_output[correct])
+            #all_answer_count.update(numpy_answer)
 
             if (("IMG" in model_name) or ("SAN" in model_name)) and type(epoch) == type(0.1) and (
                     i * batch_size // 2) > (
@@ -946,12 +948,10 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     class_correct['total'] = sum(class_correct.values())
     class_total['total'] = sum(class_total.values())
 
-    print("class_correct", class_correct)
-    print("class_total", class_total)
-    print("all_output_count", all_output_count)
-    print("correct_output_count", correct_output_count)
-    average_loss = sum(losses) / len(dataset)
-    print("average_loss", average_loss )
+    prediction = np.concatenate(prediction,axis=1)
+    
+
+    
     
 
     #Debug
@@ -964,16 +964,29 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     print('Avg Acc: {:.5f}'.format(total_score))
 
     visualize_val(
-        global_iteration,tensorboard_client,val_split,
-        class_total,class_correct,average_loss,
-        correct_output_count,all_answer_count,all_output_count)
+        global_iteration,tensorboard_client,val_split,len(dataset),
+        class_total,class_correct,losses,
+        prediction)
 
     return prediction,total_score
 
 def visualize_val(
-    global_iteration,tensorboard_client,val_split,
-    class_total,class_correct,average_loss,
-    correct_output_count,all_answer_count,all_output_count):
+    global_iteration,tensorboard_client,val_split,n_batch,
+    class_total,class_correct,losses,
+    prediction):
+
+    correct_pred = prediction[1] == prediction[2]
+
+    all_output_count = Counter(prediction[2])
+    correct_output_count = Counter(prediction[2][correct_pred])
+    all_answer_count = Counter(prediction[1])
+    average_loss = sum(losses) / n_batch
+
+    #Precision, Recall
+    unique_answers = list(Counter(all_answer_count).keys())
+    precision,recall,f1_score,supp = precision_recall_fscore_support(prediction[0],prediction[1],labels=unique_answers)
+
+
     chart_dic = {k:class_correct[k] / v
         for k, v in class_total.items()
     }
@@ -987,15 +1000,28 @@ def visualize_val(
 
     tensorboard_client.append_line(
         global_iteration,{
-            str(key):correct_output_count[key]/all_answer_count[key] 
-            for key in all_answer_count.keys()},
-            f"Evaluation/{val_split}_correctness_per_answer")
+            f"answer_{answer}":prec 
+            for prec,answer in zip(*[precision,unique_answers])},
+            f"Evaluation/{val_split}_precision")
 
     tensorboard_client.append_line(
         global_iteration,{
-            str(key):all_output_count[key] 
-            for key in all_answer_count.keys()},
-            f"Evaluation/{val_split}_pred_per_answer")
+            f"answer_{answer}":rec 
+            for rec,answer in zip(*[recall,unique_answers])},
+            f"Evaluation/{val_split}_recall")
+
+    tensorboard_client.append_line(
+        global_iteration,{
+            f"answer_{answer}":f1 
+            for f1,answer in zip(*[f1_score,unique_answers])},
+            f"Evaluation/{val_split}_f1_score")
+
+
+    print("class_correct", class_correct)
+    print("class_total", class_total)
+    print("all_output_count", all_output_count)
+    print("correct_output_count", correct_output_count)
+    print("average_loss", average_loss )
     
     
 

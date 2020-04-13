@@ -513,7 +513,9 @@ class SANVQA(nn.Module):
                                  self.dropout,
                                  nn.Linear(mlp_hidden_size, self.n_class))
 
+        #self.apply(self.init_parameters)
         self.fine_tune()  # define which parameter sets are to be fine-tuned
+
         self.hop = 1
 
     def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
@@ -563,14 +565,15 @@ class SANVQA(nn.Module):
             # weighted_conv_out = apply_attention(conv_out, attention)
             # augmented_lstm_output = (weighted_conv_out + lstm_final_output)
 
-        self.apply(self.init_parameters)
+        
 
         return self.mlp(augmented_lstm_output)
 
+    @staticmethod
     def init_parameters(mod):
         if isinstance(mod, nn.Conv2d) or isinstance(mod, nn.Linear):
             #Chargrid: , nonlinearity='relu'
-            nn.init.kaiming_uniform(mod.weight, nonlinearity='relu')
+            nn.init.kaiming_uniform_(mod.weight, nonlinearity='relu')
             if mod.bias is not None:
                 nn.init.constant(mod.bias, 0)
 
@@ -993,7 +996,7 @@ def visualize_val(
 
     #Precision, Recall
     unique_answers = list(Counter(all_answer_count).keys())
-    precision,recall,f1_score,supp = precision_recall_fscore_support(prediction[0],prediction[1],labels=unique_answers)
+    precision,recall,f1_score,supp = precision_recall_fscore_support(prediction[1],prediction[2],labels=unique_answers)
 
 
     chart_dic = {k:class_correct[k] / v

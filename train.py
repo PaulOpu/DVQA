@@ -563,7 +563,16 @@ class SANVQA(nn.Module):
             # weighted_conv_out = apply_attention(conv_out, attention)
             # augmented_lstm_output = (weighted_conv_out + lstm_final_output)
 
+        self.apply(self.init_parameters)
+
         return self.mlp(augmented_lstm_output)
+
+    def init_parameters(mod):
+        if isinstance(mod, nn.Conv2d) or isinstance(mod, nn.Linear):
+            #Chargrid: , nonlinearity='relu'
+            nn.init.kaiming_uniform(mod.weight, nonlinearity='relu')
+            if mod.bias is not None:
+                nn.init.constant(mod.bias, 0)
 
     def fine_tune(self, fine_tune=True):
         """
@@ -998,22 +1007,28 @@ def visualize_val(
         global_iteration,{"average_loss":average_loss},
             f"Evaluation/{val_split}_avg_loss")
 
-    tensorboard_client.append_line(
-        global_iteration,{
+    prec_dic = {
             f"answer_{answer}":prec 
-            for prec,answer in zip(*[precision,unique_answers])},
+            for prec,answer in zip(*[precision,unique_answers])}
+
+    tensorboard_client.append_line(
+        global_iteration,prec_dic,
             f"Evaluation/{val_split}_precision")
 
-    tensorboard_client.append_line(
-        global_iteration,{
+    rec_dic = {
             f"answer_{answer}":rec 
-            for rec,answer in zip(*[recall,unique_answers])},
-            f"Evaluation/{val_split}_recall")
+            for rec,answer in zip(*[recall,unique_answers])}
 
     tensorboard_client.append_line(
-        global_iteration,{
+        global_iteration,rec_dic,
+            f"Evaluation/{val_split}_recall")
+
+    f1_dic = {
             f"answer_{answer}":f1 
-            for f1,answer in zip(*[f1_score,unique_answers])},
+            for f1,answer in zip(*[f1_score,unique_answers])}
+
+    tensorboard_client.append_line(
+        global_iteration,f1_dic,
             f"Evaluation/{val_split}_f1_score")
 
 
@@ -1022,6 +1037,9 @@ def visualize_val(
     print("all_output_count", all_output_count)
     print("correct_output_count", correct_output_count)
     print("average_loss", average_loss )
+    print("f1", f1_dic )
+    print("recall", rec_dic )
+    print("precision", prec_dic )
     
     
 

@@ -50,7 +50,7 @@ lr_gamma = 2  # gamma (float) – Multiplicative factor of learning rate decay. 
 weight_decay = 1e-4
 n_epoch = 4000
 reverse_question = False
-batch_size = 128#(64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
+batch_size = 64#(64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
 n_workers = 0 #0  # 4
 clip_norm = 50
 load_image = False
@@ -445,12 +445,13 @@ class SANVQA(nn.Module):
         super(SANVQA, self).__init__()
 
         #just concat
-        conv_output_size  = 64 #* 2 #2048
-        lstm_hidden = 16 #512
-        mid_feature = 128 #512
-        mlp_hidden_size = 128 # 1024
-        embed_hidden = 50
-        glimpses = 2
+        #conv_output_size  = 64 #* 2 #2048
+        #lstm_hidden = 16 #512
+        self.chargrid_channels = 0
+        mid_feature = 512 #128
+        #mlp_hidden_size = 128 # 1024
+        #embed_hidden = 50
+        #glimpses = 2
 
         self.n_class = n_class
         self.embed = nn.Embedding(n_vocab, embed_hidden)
@@ -460,36 +461,36 @@ class SANVQA(nn.Module):
         # resnet = torchvision.models.resnet152(
         #     pretrained=True)
         resnet = torchvision.models.resnet101(
-            pretrained=False)  # 051019, batch_size changed to 32 from 64. ResNet 152 to Resnet 101.
+            pretrained=True)  # 051019, batch_size changed to 32 from 64. ResNet 152 to Resnet 101.
         # pretrained ImageNet ResNet-101, use the output of final convolutional layer after pooling
         #Debug: Shallow 
-        modules = list(resnet.children())[:-6]#:-2]
-        modules[0] = nn.Conv2d(3, conv_output_size, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-        modules[1] = nn.BatchNorm2d(conv_output_size)
-
+        modules = list(resnet.children())[:-2] #:-6]
+        ##modules[0] = nn.Conv2d(3, conv_output_size, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+        ##modules[1] = nn.BatchNorm2d(conv_output_size)
+        self.resnet = nn.Sequential(*modules)
         # modules = list(resnet.children())[:-1]  # including AvgPool2d, 051019 afternoon by Xin
 
         act_f = nn.ReLU()
 
         #Chargrid
+        if self.chargrid_channels > 0:
+            chargrid_resnet = torchvision.models.resnet101(
+                pretrained=False)
+            chargrid_modules = list(chargrid_resnet.children())[:-2] #[:-6]
+            chargrid_modules[0:0] = [
+                nn.Conv2d(41,64,1,1,0),
+                nn.BatchNorm2d(64),
+                act_f
+                ]
+            chargrid_modules[3] = nn.Conv2d(64, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
+            #chargrid_modules.append(Chargrid_Encoder(64,act_f))
+            self.chargrid_net = nn.Sequential(*chargrid_modules)
 
-        chargrid_resnet = torchvision.models.resnet101(
-            pretrained=False)
-        chargrid_modules = list(chargrid_resnet.children())[:-6]
-        chargrid_modules[0:0] = [
-            nn.Conv2d(41,10,1,1,0),
-            nn.BatchNorm2d(10),
-            act_f
-            ]
-        chargrid_modules[3] = nn.Conv2d(10, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
-        #chargrid_modules.append(Chargrid_Encoder(64,act_f))
-        self.chargrid_net = nn.Sequential(*chargrid_modules)
-
-        self.entitygrid_net = nn.Sequential(
-            nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 28
-            nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 14
-            nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 8
-        )
+            self.entitygrid_net = nn.Sequential(
+                nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 28
+                nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 14
+                nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 8
+            )
 
         #chargrid_modules[0][0].conv1 = nn.Conv2d(
         #    1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
@@ -500,30 +501,32 @@ class SANVQA(nn.Module):
         #    nn.Conv2d(64, mid_features, 1)
         #)
 
-        self.resnet = nn.Sequential(*modules)
+        
         self.dropout = nn.Dropout(
             p=dropout_rate)  # insert Dropout layers after convolutional layers that you’re going to fine-tune
 
-        self.attention = Attention(2 * conv_output_size, lstm_hidden, mid_features=mid_feature, glimpses=glimpses, drop=0.5)
+        self.attention = Attention(self.chargrid_channels+ conv_output_size, lstm_hidden, mid_features=mid_feature, glimpses=glimpses, drop=0.5)
 
         self.mlp = nn.Sequential(self.dropout,  ## TODO: shall we eliminate this??
-                                 nn.Linear(2 * conv_output_size * glimpses + lstm_hidden,
+                                 nn.Linear((self.chargrid_channels + conv_output_size) * glimpses + lstm_hidden,
                                            mlp_hidden_size),
                                  nn.ReLU(),
                                  self.dropout,
                                  nn.Linear(mlp_hidden_size, self.n_class))
 
         self.fine_tune()  # define which parameter sets are to be fine-tuned
+        #self.apply(self.init_parameters)
         self.hop = 1
 
     def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
         conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
         
         #Chargrid here and 2 * 64
-        chargrid = self.chargrid_net(chargrid)
-        conv_out = torch.cat([conv_out,chargrid],1)
+        if self.chargrid_channels > 0:
+            chargrid = self.chargrid_net(chargrid)
+            conv_out = torch.cat([conv_out,chargrid],1)
 
-        conv_out = self.entitygrid_net(conv_out)
+            conv_out = self.entitygrid_net(conv_out)
         # normalize by feature map, why need it and why not??
         # conv_out = conv_out / (conv_out.norm(p=2, dim=1, keepdim=True).expand_as(
         #     conv_out) + 1e-8)  # Section 3.1 of show, ask, attend, tell
@@ -563,10 +566,11 @@ class SANVQA(nn.Module):
             # weighted_conv_out = apply_attention(conv_out, attention)
             # augmented_lstm_output = (weighted_conv_out + lstm_final_output)
 
-        self.apply(self.init_parameters)
+        
 
         return self.mlp(augmented_lstm_output)
 
+    @staticmethod
     def init_parameters(mod):
         if isinstance(mod, nn.Conv2d) or isinstance(mod, nn.Linear):
             #Chargrid: , nonlinearity='relu'
@@ -589,6 +593,11 @@ class SANVQA(nn.Module):
             for c in list(self.resnet.children())[5:]:
                 for p in c.parameters():
                     p.requires_grad = fine_tune
+            if self.chargrid_channels > 0:
+                for c in list(self.chargrid_net.children()):
+                    for p in c.parameters():
+                        p.requires_grad = fine_tune
+                
 
         for p in self.mlp.parameters():
             p.requires_grad = True
@@ -633,19 +642,20 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
 
     #Chargrid: Visualize
     attention_map = SaveFeatures(vqa_model.attention)
-    chargrid_act1 = SaveFeatures(vqa_model.chargrid_net[0])
-    #chargrid_act1 = SaveFeatures(
-    #    vqa_model.chargrid_net[7].encoder_modules[0].conv2d_batch_act[0])
-
-    chargrid_act3 = SaveFeatures(vqa_model.chargrid_net[3])
-    #chargrid_act3 = SaveFeatures(
-    #    vqa_model.chargrid_net[7].decoder_modules[-1])
-    
     img_act0 = SaveFeatures(vqa_model.resnet[0])
-
-    tensorboard_client.register_hook("chargrid_act0",chargrid_act1)
-    tensorboard_client.register_hook("chargrid_act3",chargrid_act3)
     tensorboard_client.register_hook("img_act0",img_act0)
+
+    if vqa_model.chargrid_channels > 0:
+        chargrid_act1 = SaveFeatures(vqa_model.chargrid_net[0])
+        #chargrid_act1 = SaveFeatures(
+        #    vqa_model.chargrid_net[7].encoder_modules[0].conv2d_batch_act[0])
+
+        chargrid_act3 = SaveFeatures(vqa_model.chargrid_net[3])
+        #chargrid_act3 = SaveFeatures(
+        #    vqa_model.chargrid_net[7].decoder_modules[-1])
+        tensorboard_client.register_hook("chargrid_act0",chargrid_act1)
+        tensorboard_client.register_hook("chargrid_act3",chargrid_act3)
+    
 
     norm_img = mpl.colors.Normalize(vmin=-1,vmax=1)
     plt.style.use('seaborn-white')
@@ -787,27 +797,27 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
                         att1,
                         f"Attention/glimps1_{correct_class}")
                     
+                    if vqa_model.chargrid_channels > 0:
                     
-                    
-                    tensorboard_client.add_conv2(
-                        global_iteration,
-                        model.chargrid_net[0],
-                        "Chargrid/Conv1",
-                        "chargrid_act0",
-                        select_mask,
-                        n_pictures,
-                        f"_{correct_class}"
-                    )
+                        tensorboard_client.add_conv2(
+                            global_iteration,
+                            model.chargrid_net[0],
+                            "Chargrid/Conv1",
+                            "chargrid_act0",
+                            select_mask,
+                            n_pictures,
+                            f"_{correct_class}"
+                        )
 
-                    tensorboard_client.add_conv2(
-                        global_iteration,
-                        model.chargrid_net[3],
-                        "Chargrid/Conv2",
-                        "chargrid_act3",
-                        select_mask,
-                        n_pictures,
-                        f"_{correct_class}"
-                    )
+                        tensorboard_client.add_conv2(
+                            global_iteration,
+                            model.chargrid_net[3],
+                            "Chargrid/Conv2",
+                            "chargrid_act3",
+                            select_mask,
+                            n_pictures,
+                            f"_{correct_class}"
+                        )
 
             # #Chargrid Input
             # visu_chargrid = torch.sum(chargrid[:16],dim=1,keepdim=True).cpu().numpy()
@@ -993,7 +1003,7 @@ def visualize_val(
 
     #Precision, Recall
     unique_answers = list(Counter(all_answer_count).keys())
-    precision,recall,f1_score,supp = precision_recall_fscore_support(prediction[0],prediction[1],labels=unique_answers)
+    precision,recall,f1_score,supp = precision_recall_fscore_support(prediction[1],prediction[2],labels=unique_answers)
 
 
     chart_dic = {k:class_correct[k] / v

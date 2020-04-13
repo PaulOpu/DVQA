@@ -514,8 +514,13 @@ class SANVQA(nn.Module):
                                  self.dropout,
                                  nn.Linear(mlp_hidden_size, self.n_class))
 
-        self.fine_tune()  # define which parameter sets are to be fine-tuned
         #self.apply(self.init_parameters)
+        self.fine_tune()  # define which parameter sets are to be fine-tuned
+<<<<<<< HEAD
+        #self.apply(self.init_parameters)
+=======
+
+>>>>>>> 437be69eff2ad730f6c0356d7bc3c7912163c794
         self.hop = 1
 
     def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
@@ -574,7 +579,7 @@ class SANVQA(nn.Module):
     def init_parameters(mod):
         if isinstance(mod, nn.Conv2d) or isinstance(mod, nn.Linear):
             #Chargrid: , nonlinearity='relu'
-            nn.init.kaiming_uniform(mod.weight, nonlinearity='relu')
+            nn.init.kaiming_uniform_(mod.weight, nonlinearity='relu')
             if mod.bias is not None:
                 nn.init.constant(mod.bias, 0)
 

@@ -125,7 +125,7 @@ class DVQA(Dataset):
         ##self.bboxes = self.bb['emb_bboxes']
         ##self.bbox_len = self.bb['emb_bboxes_len']
 
-        self.c = h5py.File(os.path.join(root, self.split + '_chargrid_yes_no.h5py'), 'r')
+        self.c = h5py.File(os.path.join(root, self.split + '_chargrid.h5py'), 'r')
         self.chargrids = self.c['chargrid']
 
 
@@ -212,7 +212,9 @@ class DVQA(Dataset):
 
         ##n_bbox = torch.tensor(self.bbox_len[index])
         ##torch_bboxes = torch.tensor(self.bboxes[index,:n_bbox])
-        chargrid = torch.tensor(self.chargrids[index])
+
+        chargrid = torch.tensor(self.chargrids[hdf5_idx_for_this_image])
+        #chargrid = torch.zeros((224,224))
 
         ##return img, question, len(question), answer, question_class, torch_bboxes, n_bbox, index  # answer_class
         return img, question, len(question), answer, question_class, chargrid, index

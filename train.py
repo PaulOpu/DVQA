@@ -94,8 +94,6 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
         tensorboard_client.register_hook("chargrid_act0",chargrid_act1)
         tensorboard_client.register_hook("chargrid_act3",chargrid_act3)
     
-
-    norm_img = mpl.colors.Normalize(vmin=-1,vmax=1)
     plt.style.use('seaborn-white')
 
     #Train Epoch

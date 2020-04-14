@@ -269,7 +269,9 @@ class SANVQA(nn.Module):
 
     def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
         conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
-        
+        qn = torch.norm(conv_out, p=2, dim=1, keepdim=True).detach()
+        conv_out = conv_out.div(qn.expand_as(conv_out))
+
         #Chargrid here and 2 * 64
         if self.chargrid_channels > 0:
             chargrid = self.chargrid_net(chargrid)

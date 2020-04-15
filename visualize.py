@@ -11,6 +11,8 @@ import matplotlib as mpl
 import textwrap
 import seaborn as sns
 
+from model import Conv2dBatchAct
+
 
 class TensorBoardVisualize():
 
@@ -69,6 +71,8 @@ class TensorBoardVisualize():
     def add_conv2(self,x,module,chart,hook_name,mask,n_act,suffix=""):
 
         #weights and gradients
+        if isinstance(module,Conv2dBatchAct):
+            module = module.conv2d_batch_act[0]
         weights = module.weight.data.cpu().numpy()
         gradients = module.weight.grad.cpu().numpy()
         self.append_histogram(x, weights.reshape(-1), f"{chart}_weights")

@@ -81,6 +81,8 @@ class TensorBoardVisualize():
         #need hook
         act_hook = self.hooks[hook_name]
         act = act_hook.get_features()[mask][0].unsqueeze(1).cpu()
+        act = act - act.min()
+        act = act / (act.max() - act.min())
         self.add_images(
            x,
            act,

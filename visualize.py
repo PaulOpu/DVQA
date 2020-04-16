@@ -1,3 +1,5 @@
+import comet_ml
+
 import os.path as pth
 import json
 import numpy as np
@@ -16,11 +18,19 @@ from model import Conv2dBatchAct
 
 class TensorBoardVisualize():
 
-    def __init__(self, experiment_name, logdir, dic):
+    def __init__(self, experiment_name, logdir, dic, hyperparam={"hyper":1}):
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        experiment_name = experiment_name+"_"+current_time
         self.tensorboard_writer = SummaryWriter(
-            log_dir=pth.join(logdir,experiment_name+"_"+current_time),
+            log_dir=pth.join(logdir,experiment_name),
             filename_suffix=experiment_name)
+
+        self.comet_exp = comet_ml.Experiment(project_name="masterthesis")
+        self.comet_exp.log_parameters(hyperparam)
+
+        self.comet_exp.log_asset("train.py")
+        self.comet_exp.log_asset("visualize.py")
+        self.comet_exp.log_asset("dataset.py")   
 
         self.word_dic = {v: k for k, v in dic['word_dic'].items()}
         self.answer_dic = {v: k for k, v in dic['answer_dic'].items()}
@@ -30,27 +40,45 @@ class TensorBoardVisualize():
 
         self.hooks = {}
 
-    def get_current_epoch(iteration):
+        self.epoch = 0
+        self.step = 0
 
-        return iteration / self.batch_size
+    def set_epoch_step(self,epoch,step):
+        self.epoch = epoch
+        self.step = step
 
 
     def register_hook(self,key,hook):
         self.hooks[key] = hook
 
     def append_histogram(self, x, y, chart):
+
         self.tensorboard_writer.add_histogram(chart, y, x)
         #self.tensorboard_writer.close()
 
     def append_line(self, x, y_dic, chart):
-
+        
         self.tensorboard_writer.add_scalars(chart, y_dic, x)
         #self.tensorboard_writer.close()
 
+    def comet_line(self,y_dic,prefix):
+        self.comet_exp.log_metrics(y_dic,prefix=prefix,epoch=self.epoch,step=self.step)
+
+    def comet_image(self,images,chart):
+
+        for i,comet_image in enumerate(images):
+            self.comet_exp.log_image(
+                comet_image.squeeze(0), name=f"{chart}_{i}", 
+                image_format="png",
+                image_channels="first", step=self.step)
+
     def add_images(self,x,images,chart):
+
         self.tensorboard_writer.add_images(
                 chart, images, global_step=x, 
                 walltime=None, dataformats='NCHW')
+
+        self.comet_image(images,chart)
 
     # def add_conv2(self,x,module,chart,hook_name,mask,n_act,suffix=""):
 
@@ -75,9 +103,13 @@ class TensorBoardVisualize():
             module = module.conv2d_batch_act[0]
         weights = module.weight.data.cpu().numpy()
         gradients = module.weight.grad.cpu().numpy()
-        self.append_histogram(x, weights.reshape(-1), f"{chart}_weights")
-        self.append_histogram(x, gradients.reshape(-1), f"{chart}_gradients")
 
+        self.comet_exp.log_histogram_3d(weights, name=f"{chart}_weights", step=self.step)
+        self.comet_exp.log_histogram_3d(gradients, name=f"{chart}_gradients", step=self.step)
+        
+        self.append_histogram(x, gradients.reshape(-1), f"{chart}_gradients")
+        self.append_histogram(x, weights.reshape(-1), f"{chart}_weights")
+        
         #need hook
         act_hook = self.hooks[hook_name]
         act = act_hook.get_features()[mask][0].unsqueeze(1).cpu()
@@ -107,11 +139,14 @@ class TensorBoardVisualize():
                     60),wrap=True,ha='left',va='bottom')
 
             figures.append(fig)
+            self.comet_exp.log_figure(figure_name=f"{chart}/sample{suffix}_{idx}", figure=fig, overwrite=False, step=self.step)
         
         self.tensorboard_writer.add_figure(
             f"{chart}/sample{suffix}",
             figures,
             x)
+
+        
 
 
 

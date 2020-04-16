@@ -4,6 +4,8 @@ import sys
 import pickle
 from collections import Counter
 
+import comet_ml
+
 import torch
 import torchvision
 from torch import nn
@@ -80,8 +82,10 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
 
     #Chargrid: Visualize
     attention_map = SaveFeatures(vqa_model.attention)
-    img_act0 = SaveFeatures(vqa_model.resnet[0])
-    tensorboard_client.register_hook("img_act0",img_act0)
+    img_module = vqa_model.resnet[5][0].conv1
+    img_hook_key = "img_act0"
+    img_act0 = SaveFeatures(img_module)
+    tensorboard_client.register_hook(img_hook_key,img_act0)
 
     if vqa_model.chargrid_channels > 0:
         chargrid_act1 = SaveFeatures(vqa_model.chargrid_net[0])
@@ -104,9 +108,13 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
 
     print(device)
     print(next(model.parameters()).is_cuda, "next(model.parameters()).is_cuda")
-    #Chargrid load labels,bboxes
-    ##for i, (image, question, q_len, answer, question_class, bboxes, n_bboxes, data_index) in enumerate(pbar):
+
+
+    
+#Chargrid load labels,bboxes
+##for i, (image, question, q_len, answer, question_class, bboxes, n_bboxes, data_index) in enumerate(pbar):
     for i, (image, question, q_len, answer, question_class, chargrid, data_index) in enumerate(pbar):
+        tensorboard_client.set_epoch_step(epoch,global_iteration)
 
         image, question, q_len, answer, chargrid = (##bboxes = (
             image.to(device),
@@ -177,15 +185,15 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
             #Visualize Input divided by correctness
             for is_correct,correct_class in [(True,"correct"),(False,"incorrect")]:
                 select_mask = item_correct == is_correct
-                n_pictures = min(np.sum(select_mask),8)
+                n_pictures = min(np.sum(select_mask),2)
                 if n_pictures != 0:
 
                     #Image Layer
                     tensorboard_client.add_conv2(
                         global_iteration,
-                        vqa_model.resnet[0],
+                        img_module,
                         "Image/Conv1",
-                        "img_act0",
+                        img_hook_key,
                         select_mask,
                         n_pictures,
                         f"_{correct_class}"
@@ -221,6 +229,9 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
                     attention_features = attention_features.view(n_pictures, glimpses, grid_size, grid_size)
                     if glimpses == 2:
                         att1,att2 = torch.split(attention_features,1,1)
+
+                        att2 = att2 - att2.min()
+                        att2 = att2 / (att2.max() - att2.min())   
                         tensorboard_client.add_images(
                             global_iteration,
                             att2,
@@ -228,6 +239,8 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
                     else:
                         att1 = attention_features
 
+                    att1 = att1 - att1.min()
+                    att1 = att1 / (att1.max() - att1.min())  
                     tensorboard_client.add_images(
                         global_iteration,
                         att1,
@@ -261,71 +274,26 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     #valid(epoch + float(i * batch_size / 2325316),tensorboard_client,global_iteration, train_set, model_name=model_name,
     #            load_image=load_image, val_split="train")
     
-    return global_iteration
+    return global_iteration,moving_loss
     
-
-
-def visualize_weight_gradient(global_iteration,tensorboard_client,module,weight_name,gradient_name):
-
-    weights = module.weight.data.cpu().numpy()
-    gradients = module.weight.grad.cpu().numpy()
-    tensorboard_client.append_histogram(global_iteration, weights.reshape(-1), weight_name)
-    tensorboard_client.append_histogram(global_iteration, gradients.reshape(-1), gradient_name)
 
 def visualize_train(global_iteration,run_name,tensorboard_client,loss,moving_loss):
     if (global_iteration % train_progress_iteration != 0):
         return
 
+    
     # - loss
-    tensorboard_client.append_line(global_iteration,{"loss":loss.detach().item()},"Training/running_loss")
+    loss_dic = {"loss":loss.detach().item()}
+    tensorboard_client.append_line(global_iteration,loss_dic,"Training/running_loss")
+    
     # - accuracy
-    tensorboard_client.append_line(global_iteration,{run_name:moving_loss},"Training/accuracy")
-
+    acc_dic = {"accuracy":moving_loss}
+    tensorboard_client.append_line(global_iteration,acc_dic,"Training/accuracy")
     
-    
+    with tensorboard_client.comet_exp.train():
+        tensorboard_client.comet_line(loss_dic,"running")
+        tensorboard_client.comet_line(acc_dic,"moving")
 
-    """
-    #Chargrid: Early Concat
-    for bottlenet_id,bottleneck in enumerate(chargrid_net[-1]):
-        for conv_name in ["conv1"]:
-            visualize_weight_gradient(
-                global_iteration,
-                tensorboard_client,
-                getattr(bottleneck,conv_name),
-                f"{name}_weights/conv2_bottlenet{bottlenet_id}_{conv_name}",
-                f"{name}_gradients/conv2_bottlenet{bottlenet_id}_{conv_name}"
-            )
-
-    #EntityGrid Net
-    name = "Entitygrid"
-    entitygrid_net = model.entitygrid_net
-    #for idx in [0,3,6,9]:
-    #    weights = entitygrid_net[idx].weight.data.cpu().numpy()
-    #    gradients = entitygrid_net[idx].weight.grad.cpu().numpy()
-    #    tensorboard_client.append_histogram(global_iteration, weights.reshape(-1), f"{name}/weights_{idx}")
-    #    tensorboard_client.append_histogram(global_iteration, gradients.reshape(-1), f"{name}/gradients_{idx}")
-    #
-    #Chargrid: Early Concat
-    for bottlenet_id,bottleneck in enumerate(entitygrid_net[0]):
-        for conv_name in ["conv1"]:
-            visualize_weight_gradient(
-                global_iteration,
-                tensorboard_client,
-                getattr(bottleneck,conv_name),
-                f"{name}_weights/conv3_bottlenet{bottlenet_id}_{conv_name}",
-                f"{name}_gradients/conv3_bottlenet{bottlenet_id}_{conv_name}"
-            )
-
-    for bottlenet_id,bottleneck in enumerate(entitygrid_net[-1]):
-        for conv_name in ["conv1"]:
-            visualize_weight_gradient(
-                global_iteration,
-                tensorboard_client,
-                getattr(bottleneck,conv_name),
-                f"{name}_weights/conv5_bottlenet{bottlenet_id}_{conv_name}",
-                f"{name}_gradients/conv5_bottlenet{bottlenet_id}_{conv_name}"
-            )
-     """
 
 def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True, model_name=None, val_split="val_easy"):
     #run_name = val_split
@@ -337,11 +305,11 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     class_total = Counter()
     losses,prediction,all_output_count,correct_output_count,all_answer_count = [],[],Counter(),Counter(),Counter()
     
-
     with torch.no_grad():
 
         ##for i, (image, question, q_len, answer, answer_class, bboxes, n_bboxes, data_index) in enumerate(tqdm(dataset)):
         for i, (image, question, q_len, answer, answer_class, chargrid, data_index) in enumerate(tqdm(dataset)):
+
             image, question, q_len, chargrid = (
                 image.to(device),
                 question.to(device),
@@ -409,14 +377,14 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     print('Avg Acc: {:.5f}'.format(total_score))
 
     visualize_val(
-        global_iteration,tensorboard_client,val_split,len(dataset),
+        global_iteration,tensorboard_client,val_split,len(dataset),epoch,
         class_total,class_correct,losses,
         prediction)
 
     return prediction,total_score
 
 def visualize_val(
-    global_iteration,tensorboard_client,val_split,n_batch,
+    global_iteration,tensorboard_client,val_split,n_batch,epoch,
     class_total,class_correct,losses,
     prediction):
 
@@ -444,7 +412,7 @@ def visualize_val(
             f"Evaluation/{val_split}_avg_loss")
 
     prec_dic = {
-            f"answer_{answer}":prec 
+            f"prec_{answer}":prec 
             for prec,answer in zip(*[precision,unique_answers])}
 
     tensorboard_client.append_line(
@@ -452,7 +420,7 @@ def visualize_val(
             f"Evaluation/{val_split}_precision")
 
     rec_dic = {
-            f"answer_{answer}":rec 
+            f"rec_{answer}":rec 
             for rec,answer in zip(*[recall,unique_answers])}
 
     tensorboard_client.append_line(
@@ -460,12 +428,17 @@ def visualize_val(
             f"Evaluation/{val_split}_recall")
 
     f1_dic = {
-            f"answer_{answer}":f1 
+            f"f1_{answer}":f1 
             for f1,answer in zip(*[f1_score,unique_answers])}
 
     tensorboard_client.append_line(
         global_iteration,f1_dic,
             f"Evaluation/{val_split}_f1_score")
+
+    with tensorboard_client.comet_exp.test():
+        [chart_dic.update(dic) for dic in [prec_dic,rec_dic,rec_dic,f1_dic,{"average_loss":average_loss}]]
+        tensorboard_client.comet_line(chart_dic,f"{val_split}")
+        
 
 
     print("class_correct", class_correct)
@@ -518,6 +491,7 @@ if __name__ == '__main__':
         model = SANVQA(n_answers, n_vocab=n_words, encoded_image_size=(14 if load_from_hdf5 == False else 7))
         #model = nn.DataParallel(model)
         load_image = True
+        
         model = model.to(device)
 
     criterion = nn.CrossEntropyLoss()
@@ -577,32 +551,59 @@ if __name__ == '__main__':
     """
 
     #Chargrid: Create Tensorboard Writer
-    tensorboard_client = TensorBoardVisualize(sys.argv[3],"log/",dic,)
+    tensorboard_client = TensorBoardVisualize(sys.argv[3],"log/",dic)
+    tensorboard_client.comet_exp.set_model_graph(str(model))
     global_iteration = 0
 
     #Chargrid: Continue from Checkpoint
-    checkpoint_epoch = int(sys.argv[4])
-    start_epoch = 0
-    best_score = 0
+    checkpoint_epoch = sys.argv[4]
+    start_epoch,best_score,best_moving_loss,best_train_score = 0,0,0,0
+
     score_file = f"scores/{sys.argv[3]}_best.txt"
-    best_score_list = []
-    if checkpoint_epoch > 0:
-        checkpoint_name = 'checkpoint/checkpoint_' + sys.argv[3] + '_{}.model'.format(str(checkpoint_epoch).zfill(3))
-        #model.load_state_dict(torch.load(model.state_dict())
-        print("load from checkpoint ",checkpoint_name)
+    score_train_file = f"scores/{sys.argv[3]}_train_best.txt"
+    best_score_list,best_train_score_list = [],[]
+    if checkpoint_epoch == "newest":
+        checkpoint_name = 'checkpoint/checkpoint_{}_{}.model'.format(sys.argv[3],checkpoint_epoch)
+        checkpoint_epoch_name = f'checkpoint/checkpoint_{sys.argv[3]}_epoch.txt'
+
+        with open(checkpoint_epoch_name,"r") as f:
+            start_epoch = int(f.read())
+        checkpoint_epoch = start_epoch
+
         model.load_state_dict(
             torch.load(checkpoint_name, map_location='cuda'))
-        global_iteration = len(train_set)*checkpoint_epoch
-        start_epoch = checkpoint_epoch
 
-        if os.path.exists(score_file):
-            with open(score_file,"r") as f:
-                best_score_list = f.read().split("\n")
-            best_score = float(best_score_list[-1].split(",")[1])
+    else:
+        checkpoint_epoch = int(checkpoint_epoch)
+        if checkpoint_epoch > 0:
+            checkpoint_name = 'checkpoint/checkpoint_{}_{}.model'.format(sys.argv[3],str(checkpoint_epoch).zfill(3))
+        
+            print("load from checkpoint ",checkpoint_name)
+            model.load_state_dict(
+                torch.load(checkpoint_name, map_location='cuda'))
+            
+            start_epoch = checkpoint_epoch
 
-    
+            i = 1
+            while os.path.exists(score_file):
+                score_file = score_file[:-4] + f"{i}.txt"
+                score_train_file = score_train_file[:-4] + f"{i}.txt"
 
+        # if os.path.exists(score_file):
+        #     with open(score_file,"r") as f:
+        #         best_score_list = f.read().split("\n")
+        #     best_score = float(best_score_list[-1].split(",")[1])
+
+        # if os.path.exists(score_train_file):
+        #     with open(score_train_file,"r") as f:
+        #         best_train_score_list = f.read().split("\n")
+        #     best_train_score = float(best_train_score_list[-1].split(",")[1])
+
+
+    global_iteration = len(train_set)*start_epoch
     for epoch in range(start_epoch,n_epoch+start_epoch):
+        print("epoch=", epoch)
+        tensorboard_client.set_epoch_step(epoch,global_iteration)
         # if scheduler.get_lr()[0] < lr_max:
         #     scheduler.step()
         print("epoch=", epoch)
@@ -614,43 +615,67 @@ if __name__ == '__main__':
         #     model.load_state_dict(
         #         torch.load(checkpoint_name, map_location='cuda' if torch.cuda.is_available() else 'cpu'))
         #     continue
-        global_iteration = train(
+        global_iteration,moving_loss = train(
             epoch,
             tensorboard_client,
             global_iteration,
             train_set.dataset.word_class,
             train_set.dataset.answer_class,
             load_image=load_image, model_name=model_name)
-        #Debug
+        #Debug        
+
+        if (moving_loss > best_moving_loss) and (moving_loss > 0.5):
+            best_moving_loss = moving_loss
+            train_prediction,total_train_score = valid(epoch,tensorboard_client,global_iteration, train_set, model_name=model_name, load_image=load_image, val_split="train")
+            if (total_train_score > best_train_score):
+                checkpoint_name = f'checkpoint/checkpoint_{sys.argv[3]}_{str(epoch + 1).zfill(3)}.model'
+                train_prediction_name = f"predictions/prediction_train_{sys.argv[3]}_{str(epoch + 1).zfill(3)}.pkl"
+
+                print(f"New best training score: {total_train_score:.5f}, saved in {checkpoint_name}")
+                with open(checkpoint_name, 'wb') as f:
+                    torch.save(model.state_dict(), f)
+                best_train_score_list.append(f"{epoch},{total_train_score:.5f}")
+                with open(score_train_file,"w") as f:
+                    f.write("\n".join(best_train_score_list))
+
+                pickle.dump(train_prediction,open(train_prediction_name,"wb"))
+                tensorboard_client.comet_exp.log_asset(train_prediction_name,step=global_iteration)
+                best_train_score = total_train_score
+
         if (epoch % validation_epoch == 0):
             #valid(epoch,tensorboard_client,global_iteration, train_set, model_name=model_name, load_image=load_image, val_split="train")
             prediction,total_score = valid(epoch,tensorboard_client,global_iteration, valid_set_easy, model_name=model_name, load_image=load_image, val_split="val_easy")
 
             if total_score > best_score:
-                print(f"better score: {total_score:.5f}")
+                
                 checkpoint_name = f'checkpoint/checkpoint_{sys.argv[3]}_best.model'
+                prediction_name = f"predictions/prediction_{sys.argv[3]}_best.pkl"
+
+                print(f"New best validation score: {total_score:.5f}, saved in {checkpoint_name}")
                 with open(checkpoint_name, 'wb') as f:
                     torch.save(model.state_dict(), f)
-
                 best_score_list.append(f"{epoch},{total_score:.5f}")
                 with open(score_file,"w") as f:
                     f.write("\n".join(best_score_list))
+                pickle.dump(prediction,open(prediction_name,"wb"))
+                tensorboard_client.comet_exp.log_asset(prediction_name,step=global_iteration)
 
-                pickle.dump(prediction,open(f"predictions/prediction_{sys.argv[3]}_best.pkl","wb"))
-                
                 best_score = total_score
         #valid(epoch,tensorboard_client,global_iteration, valid_set_hard, model_name=model_name, load_image=load_image, val_split="val_hard")
         tensorboard_client.close()
 
-        
-
-        
+    
         if (epoch % saving_epoch == 0):
-            checkpoint_name = f'checkpoint/checkpoint_{sys.argv[3]}_{str(epoch + 1).zfill(3)}.model'
+            checkpoint_name = f'checkpoint/checkpoint_{sys.argv[3]}_newest.model'
+            checkpoint_epoch_name = f'checkpoint/checkpoint_{sys.argv[3]}_epoch.txt'
+            prediction_name = f"predictions/prediction_{sys.argv[3]}_newest.pkl"
+            with open(checkpoint_epoch_name,"w") as f:
+                    f.write(f"{epoch}")
             with open(checkpoint_name, 'wb') as f:
                 torch.save(model.state_dict(), f)
-            pickle.dump(prediction,open(f"/workspace/DVQA/predictions/prediction_{sys.argv[3]}_{epoch}.pkl","wb"))
+            pickle.dump(prediction_name,open(prediction_name,"wb"))
         
-        print("model saved! epoch=", epoch)
+        tensorboard_client.comet_exp.log_epoch_end(epoch, step=global_iteration)
+        
 
-    
+

@@ -200,7 +200,7 @@ class SANVQA(nn.Module):
         #just concat
         #conv_output_size  = 64 #* 2 #2048
         #lstm_hidden = 16 #512
-        self.chargrid_channels = 2048
+        self.chargrid_channels = 0
         mid_feature = 512 #128
         #mlp_hidden_size = 128 # 1024
         #embed_hidden = 50
@@ -269,11 +269,12 @@ class SANVQA(nn.Module):
 
     def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
         conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
-        qn = torch.norm(conv_out, p=2, dim=1, keepdim=True).detach()
-        conv_out = conv_out.div(qn.expand_as(conv_out))
+        conv_out = F.normalize(conv_out, p=2, dim=1)
+
 
         #Chargrid here and 2 * 64
         if self.chargrid_channels > 0:
+            chargrid = F.normalize(chargrid, p=2, dim=1)
             chargrid = self.chargrid_net(chargrid)
             conv_out = torch.cat([conv_out,chargrid],1)
 

@@ -10,3 +10,4 @@ scores/
 old_predictions/
 old_scores/
 old_checkpoint/
+.comet.config

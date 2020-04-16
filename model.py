@@ -24,7 +24,6 @@ import seaborn as sns
 #sys.path.append('/workspace/st_vqa_entitygrid/solution/')
 sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
 from dvqa import enlarge_batch_tensor
-from visualize import TensorBoardVisualize,SaveFeatures
 from sklearn.metrics import precision_recall_fscore_support
 
 from torchvision.models import resnet101 as _resnet101
@@ -78,6 +77,14 @@ def tile_2d_over_nd(feature_vector, feature_map):
                                                                     feature_map.size()[-1])
     return tiled
 
+
+def init_parameters(mod):
+    if isinstance(mod, nn.Conv2d) or isinstance(mod, nn.Linear):
+        #Chargrid: , nonlinearity='relu'
+        nn.init.kaiming_uniform_(mod.weight, nonlinearity='relu')
+        if mod.bias is not None:
+            nn.init.constant(mod.bias, 0)
+
 class Conv2dBatchAct(torch.nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, act_f, stride=1, padding=0, dilation=1):
         """
@@ -90,6 +97,9 @@ class Conv2dBatchAct(torch.nn.Module):
             nn.BatchNorm2d(out_channels),
             act_f,
         )
+
+        init_parameters(self.conv2d_batch_act[0])
+
 
     def forward(self, x):
         """
@@ -110,9 +120,9 @@ class Chargrid_Encoder(torch.nn.Module):
 
         encoder_parameter_blocks= [
             #in, out, stride, dilation
-            [in_channels,64,2,1], #a
-            [64,128,2,1], #a
-            [128,256,2,2], #a
+            [in_channels,64,2,1], #a #56
+            [64,128,2,1], #a #28
+            [128,256,2,2], #a #14
             [256,512,1,4], #a''
             [512,512,1,8], #a''
         ]
@@ -120,12 +130,12 @@ class Chargrid_Encoder(torch.nn.Module):
         self.encoder_modules = nn.ModuleList()
 
         for i,(in_ch,out_ch,stride,dilation) in enumerate(encoder_parameter_blocks):
-            self.encoder_modules.extend(nn.Sequential(
+            self.encoder_modules.extend([
                 Conv2dBatchAct(in_ch,out_ch,3,act_f,stride,dilation,dilation), #C112
                 Conv2dBatchAct(out_ch,out_ch,3,act_f,1,dilation,dilation),
                 Conv2dBatchAct(out_ch,out_ch,3,act_f,1,dilation,dilation),
                 torch.nn.Dropout()
-                )
+                ]
             )
 
         self.lateral_start = [3,7,11]
@@ -155,7 +165,7 @@ class Chargrid_Encoder(torch.nn.Module):
 
             
 
-            self.decoder_modules.extend(nn.Sequential(*curr_module))
+            self.decoder_modules.extend(curr_module)
             
         self.lateral_end = [0,5,10]
 
@@ -212,9 +222,10 @@ class SANVQA(nn.Module):
 
         self.enc_image_size = encoded_image_size
 
-        resnet = torchvision.models.resnet101(
+        resnet = torchvision.models.resnet152(
             pretrained=True)  
         modules = list(resnet.children())[:-2] #:-6]
+        modules.append(nn.ConvTranspose2d(2048,2048,3,2,1,1))
         ##modules[0] = nn.Conv2d(3, conv_output_size, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
         ##modules[1] = nn.BatchNorm2d(conv_output_size)
         self.resnet = nn.Sequential(*modules)
@@ -222,17 +233,33 @@ class SANVQA(nn.Module):
         act_f = nn.ReLU()
         #Chargrid
         if self.chargrid_channels > 0:
-            chargrid_resnet = torchvision.models.resnet101(
-                pretrained=False)
-            chargrid_modules = list(chargrid_resnet.children())[:-2] #[:-6]
-            chargrid_modules[0:0] = [
-                nn.Conv2d(41,10,1,1,0),
-                nn.BatchNorm2d(10),
-                act_f
+
+
+            #chargrid_resnet = torchvision.models.resnet101(
+            #    pretrained=False)
+            #chargrid_modules = list(chargrid_resnet.children())[:-6] #[:-2]
+            #chargrid_modules[0:0] = [
+            chargrid_modules = [
+                Conv2dBatchAct(41,10,1,act_f,1), 
+                Conv2dBatchAct(10,64,3,act_f,2,1), # -> 112
+                Chargrid_Encoder(64,act_f),
+                Conv2dBatchAct(64,128,3,act_f,2,1), # -> 56
+                Conv2dBatchAct(128,256,3,act_f,2,1), # -> 28
+                Conv2dBatchAct(256,512,3,act_f,2,1), # -> 14
                 ]
-            chargrid_modules[3] = nn.Conv2d(10, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
             #chargrid_modules.append(Chargrid_Encoder(64,act_f))
             self.chargrid_net = nn.Sequential(*chargrid_modules)
+            #self.init_parameters(self.chargrid_net)
+            
+            entitygrid_depth = 2048+512
+            self.entitygrid_net = nn.Sequential(
+                Conv2dBatchAct(entitygrid_depth,entitygrid_depth,1,act_f,1),
+                Conv2dBatchAct(entitygrid_depth,entitygrid_depth,1,act_f,1),
+                Conv2dBatchAct(entitygrid_depth,entitygrid_depth,1,act_f,1),
+                Conv2dBatchAct(entitygrid_depth,entitygrid_depth,3,act_f,2,1),
+            )
+
+
 
             #self.entitygrid_net = nn.Sequential(
             #    nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 28
@@ -270,15 +297,16 @@ class SANVQA(nn.Module):
     def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
         conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
         conv_out = F.normalize(conv_out, p=2, dim=1)
-
+        #qn = torch.norm(conv_out, p=2, dim=1, keepdim=True)#.detach()
+        #conv_out = conv_out.div(qn.expand_as(conv_out))
 
         #Chargrid here and 2 * 64
         if self.chargrid_channels > 0:
             chargrid = F.normalize(chargrid, p=2, dim=1)
             chargrid = self.chargrid_net(chargrid)
             conv_out = torch.cat([conv_out,chargrid],1)
+            conv_out = self.entitygrid_net(conv_out)
 
-            #conv_out = self.entitygrid_net(conv_out)
         # normalize by feature map, why need it and why not??
         # conv_out = conv_out / (conv_out.norm(p=2, dim=1, keepdim=True).expand_as(
         #     conv_out) + 1e-8)  # Section 3.1 of show, ask, attend, tell
@@ -322,13 +350,6 @@ class SANVQA(nn.Module):
 
         return self.mlp(augmented_lstm_output)
 
-    @staticmethod
-    def init_parameters(mod):
-        if isinstance(mod, nn.Conv2d) or isinstance(mod, nn.Linear):
-            #Chargrid: , nonlinearity='relu'
-            nn.init.kaiming_uniform_(mod.weight, nonlinearity='relu')
-            if mod.bias is not None:
-                nn.init.constant(mod.bias, 0)
 
     def fine_tune(self, fine_tune=True):
         """
@@ -342,6 +363,9 @@ class SANVQA(nn.Module):
             for p in self.resnet.parameters():
                 p.requires_grad = False
         else:
+            for c in list(self.resnet.children())[:5]:
+                for p in c.parameters():
+                    p.requires_grad = False
             for c in list(self.resnet.children())[5:]:
                 for p in c.parameters():
                     p.requires_grad = fine_tune

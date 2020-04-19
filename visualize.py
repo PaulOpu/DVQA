@@ -30,7 +30,8 @@ class TensorBoardVisualize():
 
         self.comet_exp.log_asset("train.py")
         self.comet_exp.log_asset("visualize.py")
-        self.comet_exp.log_asset("dataset.py")   
+        self.comet_exp.log_asset("dataset.py")
+        self.comet_exp.log_asset("model.py")      
 
         self.word_dic = {v: k for k, v in dic['word_dic'].items()}
         self.answer_dic = {v: k for k, v in dic['answer_dic'].items()}

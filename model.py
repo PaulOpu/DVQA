@@ -222,10 +222,12 @@ class SANVQA(nn.Module):
 
         self.enc_image_size = encoded_image_size
 
+        
         resnet = torchvision.models.resnet101(
             pretrained=True)  
         modules = list(resnet.children())[:-2] #:-6]
-        modules.append(nn.ConvTranspose2d(2048,2048,3,2,1,1))
+        if self.chargrid_channels > 0:
+            modules.append(nn.ConvTranspose2d(2048,2048,3,2,1,1))
         ##modules[0] = nn.Conv2d(3, conv_output_size, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
         ##modules[1] = nn.BatchNorm2d(conv_output_size)
         self.resnet = nn.Sequential(*modules)
@@ -259,14 +261,6 @@ class SANVQA(nn.Module):
                 Conv2dBatchAct(entitygrid_depth,3072,3,act_f,2,1),
             )
 
-
-
-            #self.entitygrid_net = nn.Sequential(
-            #    nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 28
-            #    nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 14
-            #    nn.MaxPool2d(kernel_size=2, stride=2, padding=1), # -> 8
-            #)
-
         #chargrid_modules[0][0].conv1 = nn.Conv2d(
         #    1024, 256, kernel_size=(1, 1), stride=(1, 1), bias=False)
         
@@ -297,6 +291,7 @@ class SANVQA(nn.Module):
     def forward(self, image, question, question_len, chargrid):  # this is an image blind example (as in section 4.1)
         conv_out = self.resnet(image)  # (batch_size, 2048, image_size/32, image_size/32)
         conv_out = F.normalize(conv_out, p=2, dim=1)
+        
         #qn = torch.norm(conv_out, p=2, dim=1, keepdim=True)#.detach()
         #conv_out = conv_out.div(qn.expand_as(conv_out))
 

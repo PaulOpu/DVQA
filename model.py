@@ -221,11 +221,12 @@ class SANVQA(nn.Module):
         self.lstm = nn.LSTM(embed_hidden, lstm_hidden, batch_first=True)
 
         self.enc_image_size = encoded_image_size
-
-        resnet = torchvision.models.resnet152(
+        
+        resnet = torchvision.models.resnet101(
             pretrained=True)  
         modules = list(resnet.children())[:-2] #:-6]
-        modules.append(nn.ConvTranspose2d(2048,2048,3,2,1,1))
+        if self.chargrid_channels > 0:
+            modules.append(nn.ConvTranspose2d(2048,2048,3,2,1,1))
         ##modules[0] = nn.Conv2d(3, conv_output_size, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
         ##modules[1] = nn.BatchNorm2d(conv_output_size)
         self.resnet = nn.Sequential(*modules)
@@ -363,9 +364,9 @@ class SANVQA(nn.Module):
             for p in self.resnet.parameters():
                 p.requires_grad = False
         else:
-            for c in list(self.resnet.children())[:5]:
-                for p in c.parameters():
-                    p.requires_grad = False
+            #for c in list(self.resnet.children())[:5]:
+            #    for p in c.parameters():
+            #        p.requires_grad = False
             for c in list(self.resnet.children())[5:]:
                 for p in c.parameters():
                     p.requires_grad = fine_tune

@@ -66,6 +66,7 @@ validation_epoch = 1
 n_label_channels = 41
 
 def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_image=True, model_name=None):
+
     run_name = "train"
     model.train(True)  # train mode
     if isinstance(model,nn.DataParallel):
@@ -174,6 +175,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
             model.train(True)
 
         #Chargrid: visualize
+
         visualize_train(
             global_iteration,run_name,tensorboard_client,
             loss,moving_loss)
@@ -269,6 +271,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
                         )
 
         #Replace by batch_size
+
         global_iteration += 1
 
     #valid(epoch + float(i * batch_size / 2325316),tensorboard_client,global_iteration, train_set, model_name=model_name,

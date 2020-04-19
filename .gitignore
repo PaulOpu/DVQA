@@ -3,3 +3,11 @@ __pycache__/
 checkpoint/
 data/
 log/
+predictions/
+checkpoint_dump/
+old_log/
+scores/
+old_predictions/
+old_scores/
+old_checkpoint/
+.comet.config

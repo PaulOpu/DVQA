@@ -92,11 +92,11 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
         #chargrid_act1 = SaveFeatures(
         #    vqa_model.chargrid_net[7].encoder_modules[0].conv2d_batch_act[0])
 
-        chargrid_act3 = SaveFeatures(vqa_model.chargrid_net[3])
+        chargrid_act4 = SaveFeatures(vqa_model.chargrid_net[4])
         #chargrid_act3 = SaveFeatures(
         #    vqa_model.chargrid_net[7].decoder_modules[-1])
         tensorboard_client.register_hook("chargrid_act0",chargrid_act1)
-        tensorboard_client.register_hook("chargrid_act3",chargrid_act3)
+        tensorboard_client.register_hook("chargrid_act4",chargrid_act4)
     
     plt.style.use('seaborn-white')
 
@@ -260,9 +260,9 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
 
                         tensorboard_client.add_conv2(
                             global_iteration,
-                            model.chargrid_net[3],
+                            model.chargrid_net[4],
                             "Chargrid/Conv2",
-                            "chargrid_act3",
+                            "chargrid_act4",
                             select_mask,
                             n_pictures,
                             f"_{correct_class}"

@@ -210,7 +210,7 @@ class SANVQA(nn.Module):
         #just concat
         #conv_output_size  = 64 #* 2 #2048
         #lstm_hidden = 16 #512
-        self.chargrid_channels = 512
+        self.chargrid_channels = 1024
         mid_feature = 512 #128
         #mlp_hidden_size = 128 # 1024
         #embed_hidden = 50
@@ -222,7 +222,7 @@ class SANVQA(nn.Module):
 
         self.enc_image_size = encoded_image_size
 
-        resnet = torchvision.models.resnet152(
+        resnet = torchvision.models.resnet101(
             pretrained=True)  
         modules = list(resnet.children())[:-2] #:-6]
         modules.append(nn.ConvTranspose2d(2048,2048,3,2,1,1))
@@ -240,23 +240,23 @@ class SANVQA(nn.Module):
             #chargrid_modules = list(chargrid_resnet.children())[:-6] #[:-2]
             #chargrid_modules[0:0] = [
             chargrid_modules = [
-                Conv2dBatchAct(41,10,1,act_f,1), 
-                Conv2dBatchAct(10,64,3,act_f,2,1), # -> 112
+                Conv2dBatchAct(41,16,1,act_f,1), 
+                Conv2dBatchAct(16,32,3,act_f,2,1), # -> 112
+                Conv2dBatchAct(32,64,3,act_f,2,1), # -> 56
                 Chargrid_Encoder(64,act_f),
-                Conv2dBatchAct(64,128,3,act_f,2,1), # -> 56
-                Conv2dBatchAct(128,256,3,act_f,2,1), # -> 28
-                Conv2dBatchAct(256,512,3,act_f,2,1), # -> 14
+                Conv2dBatchAct(64,128,3,act_f,2,1), # -> 28
+                Conv2dBatchAct(128,256,3,act_f,2,1), # -> 14
                 ]
             #chargrid_modules.append(Chargrid_Encoder(64,act_f))
             self.chargrid_net = nn.Sequential(*chargrid_modules)
             #self.init_parameters(self.chargrid_net)
             
-            entitygrid_depth = 2048+512
+            entitygrid_depth = 2048+256
             self.entitygrid_net = nn.Sequential(
                 Conv2dBatchAct(entitygrid_depth,entitygrid_depth,1,act_f,1),
                 Conv2dBatchAct(entitygrid_depth,entitygrid_depth,1,act_f,1),
                 Conv2dBatchAct(entitygrid_depth,entitygrid_depth,1,act_f,1),
-                Conv2dBatchAct(entitygrid_depth,entitygrid_depth,3,act_f,2,1),
+                Conv2dBatchAct(entitygrid_depth,3072,3,act_f,2,1),
             )
 
 
@@ -363,9 +363,9 @@ class SANVQA(nn.Module):
             for p in self.resnet.parameters():
                 p.requires_grad = False
         else:
-            for c in list(self.resnet.children())[:5]:
-                for p in c.parameters():
-                    p.requires_grad = False
+            #for c in list(self.resnet.children())[:5]:
+            #    for p in c.parameters():
+            #        p.requires_grad = False
             for c in list(self.resnet.children())[5:]:
                 for p in c.parameters():
                     p.requires_grad = fine_tune

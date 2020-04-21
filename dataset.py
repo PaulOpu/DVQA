@@ -128,6 +128,8 @@ class DVQA(Dataset):
         self.c = h5py.File(os.path.join(root, self.split + '_chargrid.h5py'), 'r')
         self.chargrids = self.c['chargrid']
 
+        #Chargrid: Question2Character
+        self.label_encoder = pickle.load(open(os.path.join(root,"label_encoder.pkl"),"rb"))
 
 
 
@@ -192,6 +194,12 @@ class DVQA(Dataset):
         #     img = eval_transform(img)
 
         # TODO!: switch question tensor (of val_easy or val_hard) position whose value > self.max_word_idx to self.OOV_index
+        
+        #---------
+        #Use Character Encoding of Question
+        question = self.label_encoder.transform(
+            list(" ".join([self.word_class[i].lower() for i in question])))
+        #---------
         question = np.array(question)
         question[question > self.max_word_idx] = self.OOV_index
 

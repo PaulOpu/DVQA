@@ -66,6 +66,7 @@ validation_epoch = 1
 n_label_channels = 41
 
 def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_image=True, model_name=None):
+
     run_name = "train"
     model.train(True)  # train mode
     if isinstance(model,nn.DataParallel):
@@ -99,11 +100,6 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
         tensorboard_client.register_hook("chargrid_act4",chargrid_act4)
     
     plt.style.use('seaborn-white')
-
-    #Train Epoch
-    start = torch.cuda.Event(enable_timing=True)
-    end = torch.cuda.Event(enable_timing=True)
-
     
 
     print(device)
@@ -174,6 +170,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
             model.train(True)
 
         #Chargrid: visualize
+
         visualize_train(
             global_iteration,run_name,tensorboard_client,
             loss,moving_loss)
@@ -269,6 +266,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
                         )
 
         #Replace by batch_size
+
         global_iteration += 1
 
     #valid(epoch + float(i * batch_size / 2325316),tensorboard_client,global_iteration, train_set, model_name=model_name,
@@ -634,7 +632,7 @@ if __name__ == '__main__':
                 print(f"New best training score: {total_train_score:.5f}, saved in {checkpoint_name}")
                 with open(checkpoint_name, 'wb') as f:
                     torch.save(model.state_dict(), f)
-                best_train_score_list.append(f"{epoch},{total_train_score:.5f}")
+                best_train_score_list.append(f"{epoch+1},{total_train_score:.5f}")
                 with open(score_train_file,"w") as f:
                     f.write("\n".join(best_train_score_list))
 

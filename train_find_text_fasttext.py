@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
-from dataset_find_text_glove import DVQA, collate_data, transform
+from dataset_find_text_fasttext import DVQA, collate_data, transform
 import time
 import os
 import matplotlib.pyplot as plt
@@ -29,7 +29,7 @@ from dvqa import enlarge_batch_tensor
 from visualize import TensorBoardVisualize,SaveFeatures
 from sklearn.metrics import precision_recall_fscore_support
 
-from model_find_text_glove import SANVQA
+from model_find_text_fasttext import SANVQA
 
 
 # if torch.__version__ == '1.1.0':

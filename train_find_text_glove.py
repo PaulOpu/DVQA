@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
-from dataset_find_text import DVQA, collate_data, transform
+from dataset_find_text_glove import DVQA, collate_data, transform
 import time
 import os
 import matplotlib.pyplot as plt
@@ -29,7 +29,7 @@ from dvqa import enlarge_batch_tensor
 from visualize import TensorBoardVisualize,SaveFeatures
 from sklearn.metrics import precision_recall_fscore_support
 
-from model_find_text import SANVQA
+from model_find_text_glove import SANVQA
 
 
 # if torch.__version__ == '1.1.0':
@@ -88,33 +88,41 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     
 #Chargrid load labels,bboxes
 ##    for i, (image, question, q_len, answer, question_class, bboxes, n_bboxes, data_index) in enumerate(pbar):
-    for i, (image, question, q_len, answer, question_class, chargrid, data_index) in enumerate(pbar):
+    for i, (image, question, q_len, answer, question_class, embeddings,bboxes,emb_lengths, data_index) in enumerate(pbar):
         tensorboard_client.set_epoch_step(epoch,global_iteration)
 
-        image, question, q_len, answer, chargrid = (##bboxes = (
+        image, question, q_len, answer, embeddings = (##bboxes = (
             image.to(device),
             question.to(device),
             torch.tensor(q_len),
             answer.to(device),
             ##bboxes.to(device)
-            chargrid.to(device)
+            embeddings.to(device)
         )
 
         tmp_batch_size = question.shape[0]
 
         #Train: Batch Loop
+        wordgrid = torch.zeros((tmp_batch_size,300,224,224),device=device)
+        for batch_i in range(tmp_batch_size):
+            for emb_i in range(embeddings.size(1)):
+                x,y,x2,y2 = bboxes[batch_i,emb_i,:]
+                emb_box = embeddings[batch_i,emb_i].repeat((x2-x,y2-y,1)).transpose(2,0)
+                wordgrid[batch_i,:,y:y2,x:x2] = emb_box
+
+        wordgrid = F.normalize(wordgrid,p=2,dim=1)
 
         #One Hot Encoding of Words
-        encoded_chargrid = torch.zeros((tmp_batch_size, 1200,224,224),device=device)
-        encoded_chargrid = encoded_chargrid.scatter_(1, chargrid.unsqueeze(1), 1)
-        encoded_chargrid[:,0,:,:] = 0. #label at index 0 is " "
+        ##encoded_chargrid = torch.zeros((tmp_batch_size, 1200,224,224),device=device)
+        ##encoded_chargrid = encoded_chargrid.scatter_(1, chargrid.unsqueeze(1), 1)
+        ##encoded_chargrid[:,0,:,:] = 0. #label at index 0 is " "
 
         #One Hot Encoding of Word in question
-        encoded_question = torch.zeros((tmp_batch_size, 1200),device=device)
-        encoded_question = encoded_question.scatter_(1, question, 1)
+        ##encoded_question = torch.zeros((tmp_batch_size, 1200),device=device)
+        ##encoded_question = encoded_question.scatter_(1, question, 1)
         
         model.zero_grad()
-        output = model(image, encoded_question, q_len, encoded_chargrid)
+        output = model(image, question, q_len, wordgrid)
 
         loss = torch.mean((output == (answer == 6.0)).float())
         #loss.backward()

@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
+from torch.nn import CosineSimilarity
 from dataset import DVQA, collate_data, transform
 import time
 import os
@@ -49,11 +50,18 @@ class SANVQA(nn.Module):
         # we save image as 3,244,244 -> after resnet152, becomes 2048*7*7
         super(SANVQA, self).__init__()
 
+        self.cos_similarity = CosineSimilarity(dim=1, eps=1e-6)
+
     def forward(self, image, question, question_len, wordgrid):  # this is an image blind example (as in section 4.1)
         
         batch_size = question.size(0)
 
-        output = (question.view((batch_size,1200,1,1)) * wordgrid).max(3)[0]
-        output = output.view(batch_size,-1).max(1)[0] == 1.0
+        #output = (question.view((batch_size,300,1,1)) * wordgrid).max(3)[0]
+        #output = output.view(batch_size,-1).max(1)[0] == 1.0
+
+        question = F.normalize(question,p=2,dim=2).view(-1,300,1,1)
+
+        cos_sim = self.cos_similarity(question,wordgrid)
+        output = cos_sim.view(batch_size,-1).max(1)[0] > 0.99
 
         return output

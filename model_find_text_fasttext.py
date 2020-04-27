@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
-from torch.nn import CosineSimilarity
+
 from dataset import DVQA, collate_data, transform
 import time
 import os
@@ -50,7 +50,10 @@ class SANVQA(nn.Module):
         # we save image as 3,244,244 -> after resnet152, becomes 2048*7*7
         super(SANVQA, self).__init__()
 
-        self.cos_similarity = CosineSimilarity(dim=1, eps=1e-6)
+        #self.qu_linear = nn.Linear(300,300)
+        #self.qu_linear = 
+
+        #self.cos_similarity = CosineSimilarity(dim=1, eps=1e-6)
 
     def forward(self, image, question, question_len, wordgrid):  # this is an image blind example (as in section 4.1)
         
@@ -59,9 +62,17 @@ class SANVQA(nn.Module):
         #output = (question.view((batch_size,300,1,1)) * wordgrid).max(3)[0]
         #output = output.view(batch_size,-1).max(1)[0] == 1.0
 
-        question = F.normalize(question,p=2,dim=2).view(-1,300,1,1)
+        
+        #question = self.qu_linear(question)
+        #question = question.view(-1,300,1,1)
 
-        cos_sim = self.cos_similarity(question,wordgrid)
-        output = cos_sim.view(batch_size,-1).max(1)[0] > 0.99
+        wordgrid = wordgrid.view(batch_size,300,-1)
 
-        return output
+        attention_weights = F.softmax(
+            torch.bmm(question,wordgrid),dim=2)
+
+        weighted_avg_wordgrid = torch.sum(wordgrid * attention_weights,dim=2)
+
+        #output = self.cos_similarity(question.squeeze(),weighted_avg_wordgrid)
+
+        return weighted_avg_wordgrid

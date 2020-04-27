@@ -133,10 +133,10 @@ class TensorBoardVisualize():
             a = fig.add_subplot(111)
 
             plt.imshow(
-                norm_img(np.transpose(image[idx],[1,2,0])),
-                vmin=0.,vmax=1.)
+                norm_img(np.transpose(image[idx],[1,2,0]).reshape((224,224))),
+                vmin=0.,vmax=1.,cmap="gray")
             a.text(0, 0, textwrap.fill(
-                    f"{index[idx]}: " + " ".join(visu_question[idx]) + f"Answer/Output: {visu_answer[idx]}/{visu_output[idx]}",
+                    f"{index[idx]}: " + " ".join(visu_question[idx]) + f" Answer/Output: {visu_answer[idx]}/{visu_output[idx]}",
                     60),wrap=True,ha='left',va='bottom')
 
             figures.append(fig)

@@ -18,7 +18,7 @@ sys.path.append('/workspace/st_vqa_entitygrid/solution/')
 #sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
 from dvqa import get_labels_and_bboxes,generate_wordgrid_emb_bboxes
 from figureqa import load_vectorizer
-from torchnlp.word_to_vector import FastText
+from torchnlp.word_to_vector import FastText,GloVe
 
 
 resize = transforms.Resize([128, 128])
@@ -134,8 +134,8 @@ class DVQA(Dataset):
         self.label_encoder = pickle.load(open(os.path.join(root,"label_encoder.pkl"),"rb"))
 
 
-        #Chargrid: Fasttext Vectorizer
-        self.fasttext_model = FastText(cache="/workspace/st_vqa_entitygrid/research/develop/.word_vectors_cache/")
+        #Chargrid: Vectorizer
+        self.emb_model = GloVe(cache="/workspace/DVQA/.word_vectors_cache/")
 
 
     def __getitem__(self, index):
@@ -207,18 +207,19 @@ class DVQA(Dataset):
         
         #question = np.array(question)
         #question[question > self.max_word_idx] = self.OOV_index
+        question_idx = question.copy()
         question = [self.word_class[i].lower() for i in question]
-        question = self.fasttext_model[question]
+        question = self.emb_model[question]
         
 
         if self.reverse_question:  # TODO: test this variant for QUES model
             question = question[::-1]
 
         #Vectors and Bboxes
-        embeddings,bboxes = generate_wordgrid_emb_bboxes(self.id2metadata[imgfile],self.fasttext_model)
+        embeddings,bboxes = generate_wordgrid_emb_bboxes(self.id2metadata[imgfile],self.emb_model)
 
         ##return img, question, len(question), answer, question_class, torch_bboxes, n_bbox, index  # answer_class
-        return img, question, len(question), answer, question_class, embeddings, bboxes, index
+        return img, question_idx, question, len(question), answer, question_class, embeddings, bboxes, index
 
     def __len__(self):
         return len(self.data)
@@ -244,18 +245,19 @@ def collate_data(batch):
 
     max_len = max(map(lambda x: len(x[1]), batch))
 
-    #questions = np.zeros((batch_size, max_len), dtype=np.int64)
-    questions = np.zeros((batch_size, max_len,300))#, dtype=np.int64)
+    question_idxs = np.zeros((batch_size, max_len), dtype=np.int64)
+    questions = torch.zeros((batch_size, max_len,300),dtype=torch.double)#, dtype=np.int64)
 
     sort_by_len = sorted(batch, key=lambda x: len(x[1]), reverse=True) 
 
     for i, b in enumerate(sort_by_len):
         #Chargrid: collate labels/bboxes 
         ##image, question, length, answer, class_, bboxes, n_bbox, index = b  # destructure a batch's data
-        image, question, length, answer, class_, embedding, bbox, index = b
+        image, question_idx, question, length, answer, class_, embedding, bbox, index = b
         images.append(image)
         length = len(question)
         questions[i, :length] = question
+        question_idxs[i, :length] = question_idx
         lengths.append(length)
         answers.append(answer)
         question_class.append(class_)
@@ -270,7 +272,7 @@ def collate_data(batch):
 
     embeddings = F.normalize(embeddings,p=2,dim=2)
 
-    return torch.stack(images), torch.from_numpy(questions), \
+    return torch.stack(images), torch.from_numpy(question_idxs), questions, \
             lengths, torch.LongTensor(answers), question_class, \
             embeddings,bboxes,emb_lengths, \
             img_ids

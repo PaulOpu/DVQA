@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
-from dataset_find_text_emb import DVQA, collate_data, transform
+from dataset_find_text_emb_conv import DVQA, collate_data, transform
 import time
 import os
 import matplotlib.pyplot as plt
@@ -29,7 +29,7 @@ from dvqa import enlarge_batch_tensor
 from visualize import TensorBoardVisualize,SaveFeatures
 from sklearn.metrics import precision_recall_fscore_support
 from torch.nn import CosineSimilarity
-from model_find_text_emb import SANVQA
+from model_find_text_emb_conv import SANVQA
 
 
 # if torch.__version__ == '1.1.0':
@@ -60,7 +60,7 @@ load_image = False
 #Saving Parameters (every 
 saving_epoch = 1
 train_progress_iteration = 5
-train_visualization_iteration = 50
+train_visualization_iteration = 100
 validation_epoch = 1
 
 n_label_channels = 41
@@ -89,12 +89,12 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     
 #Chargrid load labels,bboxes
 ##    for i, (image, question, q_len, answer, question_class, bboxes, n_bboxes, data_index) in enumerate(pbar):
-    for i, (image, question_idx, question, q_len, answer, question_class, embeddings,bboxes,emb_lengths, data_index) in enumerate(pbar):
+    for i, (image, question_idx, q_len, answer, question_class, embeddings,bboxes,emb_lengths, data_index) in enumerate(pbar):
         tensorboard_client.set_epoch_step(epoch,global_iteration)
 
-        image, question, q_len, answer, bboxes, embeddings, emb_lengths  = (
+        image, question_idx, q_len, answer, bboxes, embeddings, emb_lengths  = (
             image.to(device),
-            question.to(device),
+            question_idx.to(device),
             torch.tensor(q_len),
             answer.to(device),
             bboxes.to(device),
@@ -117,7 +117,7 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
         ##encoded_question = encoded_question.scatter_(1, question, 1)
         
         model.zero_grad()
-        output,question,wordgrid = model(image, question, q_len, embeddings, bboxes, emb_lengths)
+        output,question = model(image, question_idx, q_len, embeddings, bboxes, emb_lengths)
 
         label = answer.clone()
         label[label == 6.0] = 1.
@@ -155,13 +155,13 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
             # print("moving_loss = moving_loss * 0.99 + correct * 0.01")
 
         wrong_prediction = (cos_sim > 0.5) != (answer == 6.0)
-        if (torch.sum(wrong_prediction).item() > 0) and (global_iteration % train_visualization_iteration) == 0:
-            visu_img = wordgrid[wrong_prediction].detach()
+        if torch.sum(wrong_prediction).item() > 0:
+            visu_img = wordgrid[wrong_prediction]
             visu_img = torch.sum(visu_img,dim=1,keepdim=True)
             visu_img[visu_img != 0.] = 1
-            visu_img = visu_img.view((-1,1,224,224)).cpu().numpy()
+            visu_img = visu_img.cpu().numpy()
 
-            visu_question = question_idx[wrong_prediction].cpu().numpy()
+            visu_question = question_idx[wrong_prediction].data.numpy()
             visu_answer = answer[wrong_prediction].cpu().numpy()
             visu_output = visu_answer.copy()
             visu_output[visu_output == 6] = 8
@@ -183,18 +183,6 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
         #loss.backward()
         #nn.utils.clip_grad_norm_(model.parameters(), clip_norm)
         #optimizer.step()
-
-        #difference between questions weights and ocr weights
-        
-        question_linear_weights = model.question_linear.weight.data.cpu().numpy()
-        ocr_linear_weights = model.ocr_linear.weight.data.cpu().numpy()
-        #rmse(input,target)
-        weight_rmse = torch.sum((ocr_linear_weights - question_linear_weights) ** 2)
-        
-        tensorboard_client.append_histogram(global_iteration, question_linear_weights.reshape(-1), "linear_question_weights")
-        tensorboard_client.append_histogram(global_iteration, ocr_linear_weights.reshape(-1), "linear_ocr_weights")
-        
-        tensorboard_client.comet_line({"rmse":weight_rmse},"linear_weight")
 
         visualize_train(
             global_iteration,run_name,tensorboard_client,

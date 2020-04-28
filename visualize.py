@@ -55,6 +55,8 @@ class TensorBoardVisualize():
     def append_histogram(self, x, y, chart):
 
         self.tensorboard_writer.add_histogram(chart, y, x)
+
+        self.comet_exp.log_histogram_3d(y, name=chart, step=self.step)
         #self.tensorboard_writer.close()
 
     def append_line(self, x, y_dic, chart):
@@ -105,8 +107,8 @@ class TensorBoardVisualize():
         weights = module.weight.data.cpu().numpy()
         gradients = module.weight.grad.cpu().numpy()
 
-        self.comet_exp.log_histogram_3d(weights, name=f"{chart}_weights", step=self.step)
-        self.comet_exp.log_histogram_3d(gradients, name=f"{chart}_gradients", step=self.step)
+        #self.comet_exp.log_histogram_3d(weights, name=f"{chart}_weights", step=self.step)
+        #self.comet_exp.log_histogram_3d(gradients, name=f"{chart}_gradients", step=self.step)
         
         self.append_histogram(x, gradients.reshape(-1), f"{chart}_gradients")
         self.append_histogram(x, weights.reshape(-1), f"{chart}_weights")

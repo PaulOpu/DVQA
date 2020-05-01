@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
-from dataset_find_text_emb_conv import DVQA, collate_data, transform
+from dataset_find_text_emb import DVQA, collate_data, transform
 import time
 import os
 import matplotlib.pyplot as plt
@@ -29,7 +29,7 @@ from dvqa import enlarge_batch_tensor
 from visualize import TensorBoardVisualize,SaveFeatures
 from sklearn.metrics import precision_recall_fscore_support
 from torch.nn import CosineSimilarity
-from model_find_text_emb_conv import SANVQA
+from model_find_text_emb import SANVQA
 
 
 # if torch.__version__ == '1.1.0':
@@ -44,7 +44,7 @@ from torchvision.models import resnet101 as _resnet101
 model_name = "SANVQA"  # "SANVQAbeta" # "SANVQA"  # "IMGQUES"  # "IMG"  # "IMG"  # "QUES"  # "YES"
 use_annotation = True if model_name == "SANDY" else False
 lr = 1e-3
-lr_max = 1e-2
+lr_max = 1e-3
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 data_parallel = False
 lr_step = 20
@@ -52,7 +52,7 @@ lr_gamma = 2  # gamma (float) – Multiplicative factor of learning rate decay. 
 weight_decay = 1e-4
 n_epoch = 4000
 reverse_question = False
-batch_size = 8#(64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
+batch_size = 16#(64 if model_name == "QUES" else 32) if torch.cuda.is_available() else 4
 n_workers = 0 #0  # 4
 clip_norm = 50
 load_image = False
@@ -60,7 +60,7 @@ load_image = False
 #Saving Parameters (every 
 saving_epoch = 1
 train_progress_iteration = 5
-train_visualization_iteration = 100
+train_visualization_iteration = 50
 validation_epoch = 1
 
 n_label_channels = 41
@@ -89,12 +89,12 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     
 #Chargrid load labels,bboxes
 ##    for i, (image, question, q_len, answer, question_class, bboxes, n_bboxes, data_index) in enumerate(pbar):
-    for i, (image, question_idx, q_len, answer, question_class, embeddings,bboxes,emb_lengths, data_index) in enumerate(pbar):
+    for i, (image, question_idx, question, q_len, answer, question_class, embeddings,bboxes,emb_lengths, data_index) in enumerate(pbar):
         tensorboard_client.set_epoch_step(epoch,global_iteration)
 
-        image, question_idx, q_len, answer, bboxes, embeddings, emb_lengths  = (
+        image, question, q_len, answer, bboxes, embeddings, emb_lengths  = (
             image.to(device),
-            question_idx.to(device),
+            question.to(device),
             torch.tensor(q_len),
             answer.to(device),
             bboxes.to(device),
@@ -105,19 +105,9 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
         tmp_batch_size = question_idx.shape[0]
 
         #Train: Batch Loop
-        #question = F.normalize(question,p=2,dim=2)
-
-        #One Hot Encoding of Words
-        ##encoded_chargrid = torch.zeros((tmp_batch_size, 1200,224,224),device=device)
-        ##encoded_chargrid = encoded_chargrid.scatter_(1, chargrid.unsqueeze(1), 1)
-        ##encoded_chargrid[:,0,:,:] = 0. #label at index 0 is " "
-
-        #One Hot Encoding of Word in question
-        ##encoded_question = torch.zeros((tmp_batch_size, 1200),device=device)
-        ##encoded_question = encoded_question.scatter_(1, question, 1)
         
         model.zero_grad()
-        output,question = model(image, question_idx, q_len, embeddings, bboxes, emb_lengths)
+        output,question,wordgrid = model(image, question, q_len, embeddings, bboxes, emb_lengths)
 
         label = answer.clone()
         label[label == 6.0] = 1.
@@ -128,6 +118,9 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
         optimizer.step()
 
         cos_sim = cos_similarity(output,question.squeeze())
+
+        #Check Attention Weights
+
 
         yes_answers = cos_sim[label == 1.]
         no_answers = cos_sim[label == -1.]
@@ -154,14 +147,23 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
             moving_cos_sim_no  = moving_cos_sim_no * 0.99 + cos_sim_no_answers * 0.01
             # print("moving_loss = moving_loss * 0.99 + correct * 0.01")
 
+        question_linear_weights = model.question_linear[0].weight.data.cpu()
+        ocr_linear_weights = model.ocr_linear[0].weight.data.cpu()
+        ocr_linear_grads = model.ocr_linear[0].weight.grad.cpu()
+        ##rmse(input,target)
+        weight_rmse = torch.sum((ocr_linear_weights - question_linear_weights) ** 2)
+        weight_rmse = torch.sqrt(weight_rmse)
+
+        tensorboard_client.comet_line({"rmse":weight_rmse},"linear_weights")
+
         wrong_prediction = (cos_sim > 0.5) != (answer == 6.0)
-        if torch.sum(wrong_prediction).item() > 0:
-            visu_img = wordgrid[wrong_prediction]
+        if (torch.sum(wrong_prediction).item() > 0) and (global_iteration % train_visualization_iteration) == 0:
+            visu_img = wordgrid[wrong_prediction].detach()
             visu_img = torch.sum(visu_img,dim=1,keepdim=True)
             visu_img[visu_img != 0.] = 1
-            visu_img = visu_img.cpu().numpy()
+            visu_img = visu_img.view((-1,1,224,224)).cpu().numpy()
 
-            visu_question = question_idx[wrong_prediction].data.numpy()
+            visu_question = question_idx[wrong_prediction].cpu().numpy()
             visu_answer = answer[wrong_prediction].cpu().numpy()
             visu_output = visu_answer.copy()
             visu_output[visu_output == 6] = 8
@@ -180,9 +182,24 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
                 visu_data_index,
                 "Input",
                 f"_{correct_class}")
+
+        if (global_iteration % train_visualization_iteration == 0) and (global_iteration != 0):
+            tensorboard_client.append_histogram(global_iteration, question_linear_weights.view((-1)), "linear_question_weights")
+            tensorboard_client.append_histogram(global_iteration, ocr_linear_weights.view((-1)), "linear_ocr_weights")
+            tensorboard_client.append_histogram(global_iteration, ocr_linear_grads.view((-1)), "linear_ocr_grads")
         #loss.backward()
         #nn.utils.clip_grad_norm_(model.parameters(), clip_norm)
         #optimizer.step()
+
+        #difference between questions weights and ocr weights
+        
+        
+        
+        
+        
+        #tensorboard_client.comet_line({"weight":ocr_linear_weight},"ocr_linear")
+        #tensorboard_client.comet_line({"gradient":ocr_linear_grad},"ocr_linear")
+        
 
         visualize_train(
             global_iteration,run_name,tensorboard_client,
@@ -234,28 +251,31 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     with torch.no_grad():
 
         ##for i, (image, question, q_len, answer, answer_class, bboxes, n_bboxes, data_index) in enumerate(tqdm(dataset)):
-        for i, (image, question, q_len, answer, answer_class, chargrid, data_index) in enumerate(tqdm(dataset)):
+        for i, (image, question_idx, question, q_len, answer, question_class, embeddings,bboxes,emb_lengths, data_index) in enumerate(tqdm(dataset)):
 
-            image, question, q_len, chargrid = (
+            image, question, q_len, answer, bboxes, embeddings, emb_lengths  = (
                 image.to(device),
                 question.to(device),
                 torch.tensor(q_len),
-                ##bboxes.to(device)
-                chargrid.to(device)
+                answer.to(device),
+                bboxes.to(device),
+                embeddings.to(device),
+                emb_lengths.to(device)
             )
 
             #batch_size = labels.shape[0]
             #n_channel = labels.shape[-1]
             tmp_batch_size = question.shape[0]
-            ##chargrid = chargrid_creation(bboxes,n_bboxes,question.get_device(),tmp_batch_size)
-            encoded_chargrid = torch.zeros((tmp_batch_size, n_label_channels,224,224),device=device)
-            encoded_chargrid = encoded_chargrid.scatter_(1, chargrid.unsqueeze(1), 1)
-            #Chargrid Creation 
-            # for batch_id in range(labels.shape[0]):
-            #     for label_id in range(n_label[batch_id].item()):
-            #         x,y,x2,y2 = bboxes[batch_id,label_id,:]
-            #         label_box = labels[batch_id,label_id].repeat((x2-x,y2-y,1)).transpose(2,0)
-            #         chargrid[batch_id,:,y:y2,x:x2] = label_box
+            
+            output,question,wordgrid,attention_weights = model(image, question, q_len, embeddings, bboxes, emb_lengths)
+
+            label = answer.clone()
+            label[label == 6.0] = 1.
+            label[label == 7.0] = -1.
+
+            loss = criterion(output, question.squeeze(),label)
+
+            cos_sim = cos_similarity(output,question.squeeze())
 
             
 
@@ -400,6 +420,7 @@ if __name__ == '__main__':
     #criterion = nn.CrossEntropyLoss()
     criterion = nn.CosineEmbeddingLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    #optimizer = torch.optim.SGD(model.parameters())
     # scheduler = StepLR(optimizer, step_size=lr_step, gamma=lr_gamma) # Decays the learning rate of each parameter group by gamma every step_size epochs.
 
     train_set = DataLoader(

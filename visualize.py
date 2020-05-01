@@ -28,10 +28,10 @@ class TensorBoardVisualize():
         self.comet_exp = comet_ml.Experiment(project_name="masterthesis")
         self.comet_exp.log_parameters(hyperparam)
 
-        self.comet_exp.log_asset("train.py")
+        self.comet_exp.log_asset("train_find_text_conv.py")
         self.comet_exp.log_asset("visualize.py")
-        self.comet_exp.log_asset("dataset.py")
-        self.comet_exp.log_asset("model.py")      
+        self.comet_exp.log_asset("dataset_find_text_conv.py")
+        self.comet_exp.log_asset("model_find_text_conv.py")      
 
         self.word_dic = {v: k for k, v in dic['word_dic'].items()}
         self.answer_dic = {v: k for k, v in dic['answer_dic'].items()}
@@ -75,10 +75,10 @@ class TensorBoardVisualize():
                 image_format="png",
                 image_channels="first", step=self.step)
 
-    def add_images(self,x,images,chart):
+    def add_images(self,images,chart):
 
         self.tensorboard_writer.add_images(
-                chart, images, global_step=x, 
+                chart, images, global_step=self.step, 
                 walltime=None, dataformats='NCHW')
 
         self.comet_image(images,chart)
@@ -99,7 +99,7 @@ class TensorBoardVisualize():
     #        act,
     #        f"{chart}_activations{suffix}")
 
-    def add_conv2(self,x,module,chart,hook_name,mask,n_act,suffix=""):
+    def add_conv2(self,module,chart,hook_name,mask,n_act,suffix=""):
 
         #weights and gradients
         if isinstance(module,Conv2dBatchAct):
@@ -110,8 +110,8 @@ class TensorBoardVisualize():
         #self.comet_exp.log_histogram_3d(weights, name=f"{chart}_weights", step=self.step)
         #self.comet_exp.log_histogram_3d(gradients, name=f"{chart}_gradients", step=self.step)
         
-        self.append_histogram(x, gradients.reshape(-1), f"{chart}_gradients")
-        self.append_histogram(x, weights.reshape(-1), f"{chart}_weights")
+        self.append_histogram(self.step, gradients.reshape(-1), f"{chart}_gradients")
+        self.append_histogram(self.step, weights.reshape(-1), f"{chart}_weights")
         
         #need hook
         act_hook = self.hooks[hook_name]
@@ -119,7 +119,6 @@ class TensorBoardVisualize():
         act = act - act.min()
         act = act / (act.max() - act.min())
         self.add_images(
-           x,
            act,
            f"{chart}_act_first_image{suffix}")
 
@@ -129,13 +128,15 @@ class TensorBoardVisualize():
         visu_answer = self.answer_vect(answer)
         visu_output = self.answer_vect(output)
 
+        batch_size,channel,h,w = image.shape
+
         figures = []
-        for idx in range(image.shape[0]):
+        for idx in range(batch_size):
             fig = plt.figure()
             a = fig.add_subplot(111)
 
             plt.imshow(
-                norm_img(np.transpose(image[idx],[1,2,0]).reshape((224,224))),
+                norm_img(np.transpose(image[idx],[1,2,0]).reshape((h,w))),
                 vmin=0.,vmax=1.,cmap="gray")
             a.text(0, 0, textwrap.fill(
                     f"{index[idx]}: " + " ".join(visu_question[idx]) + f" Answer/Output: {visu_answer[idx]}/{visu_output[idx]}",

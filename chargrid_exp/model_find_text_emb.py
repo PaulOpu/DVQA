@@ -14,7 +14,7 @@ from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
 
-from dataset import DVQA, collate_data, transform
+#from dataset import DVQA, collate_data, transform
 import time
 import os
 import matplotlib.pyplot as plt
@@ -52,11 +52,21 @@ class SANVQA(nn.Module):
         super(SANVQA, self).__init__()
 
         #self.vectorizer = nn.Embedding(1200,300).double()
-        self.ocr_linear = nn.Linear(300,300)
-        self.question_linear = nn.Linear(300,300)
 
+        self.ocr_linear = nn.Sequential(
+            nn.Linear(300,300),
+            nn.ReLU()
+        )
+        self.question_linear = nn.Sequential(
+            nn.Linear(300,300),
+            nn.ReLU()
+        )
         for param in self.question_linear.parameters():
             param.requires_grad = False
+        #self.ocr_linear = nn.Parameter(torch.tensor(-0.5))
+        #self.question_linear = nn.Parameter(torch.tensor(-0.5),requires_grad=False)
+
+        
 
         #self.cos_similarity = CosineSimilarity(dim=1, eps=1e-6)
 
@@ -64,28 +74,32 @@ class SANVQA(nn.Module):
         
         batch_size = question.size(0)
 
+        embeddings = self.ocr_linear(embeddings)
+        question = self.question_linear(question)
+
         embeddings = F.normalize(embeddings,p=2,dim=2)
         question = F.normalize(question,p=2,dim=2)
 
-        embeddings = self.ocr_linear(embeddings)
-        question = self.question_linear(question)
+        
+        #embeddings = self.ocr_linear * embeddings
+        #question = self.question_linear * question
 
         wordgrid = torch.zeros((batch_size,300,224,224),device=device)
         for batch_i in range(batch_size):
             for emb_i in range(emb_lengths[batch_i]):
                 x,y,x2,y2 = bboxes[batch_i,emb_i,:]
                 emb_box = embeddings[batch_i,emb_i].repeat((x2-x,y2-y,1)).transpose(2,0)
+                #emb_box = emb_box / ((x2-x)*(y2-y))
                 wordgrid[batch_i,:,y:y2,x:x2] = emb_box
 
         #wordgrid = F.normalize(wordgrid,p=2,dim=1)
-        
         wordgrid = wordgrid.view(batch_size,300,-1)
 
         attention_weights = F.softmax(
             torch.bmm(question,wordgrid),dim=2)
 
         weighted_avg_wordgrid = torch.sum(wordgrid * attention_weights,dim=2)
-
+        weighted_avg_wordgrid = F.normalize(weighted_avg_wordgrid,p=2,dim=0)
         #output = self.cos_similarity(question.squeeze(),weighted_avg_wordgrid)
 
         return weighted_avg_wordgrid,question,wordgrid

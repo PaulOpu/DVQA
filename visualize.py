@@ -5,6 +5,7 @@ import json
 import numpy as np
 import time
 import datetime
+import collections
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -16,22 +17,45 @@ import seaborn as sns
 from model import Conv2dBatchAct
 
 
+
+def flatten(d, parent_key='', sep='/'):
+    items = []
+    for k, v in d.items():
+        new_key = parent_key + sep + k if parent_key else k
+        if isinstance(v, collections.MutableMapping):
+            items.extend(flatten(v, new_key, sep=sep).items())
+        else:
+            items.append((new_key, v))
+    return dict(items)
+
+
 class TensorBoardVisualize():
 
-    def __init__(self, experiment_name, logdir, dic, hyperparam={"hyper":1}):
+    def __init__(self, params, logdir, dic):
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        experiment_name = experiment_name+"_"+current_time
+
+        
+        experiment_name = params["exp_name"]+"_"+current_time
         self.tensorboard_writer = SummaryWriter(
             log_dir=pth.join(logdir,experiment_name),
             filename_suffix=experiment_name)
 
         self.comet_exp = comet_ml.Experiment(project_name="masterthesis")
-        self.comet_exp.log_parameters(hyperparam)
+        self.comet_exp.set_name(params["exp_name"])
 
-        self.comet_exp.log_asset("train_find_text_conv.py")
-        self.comet_exp.log_asset("visualize.py")
-        self.comet_exp.log_asset("dataset_find_text_conv.py")
-        self.comet_exp.log_asset("model_find_text_conv.py")      
+
+        self.comet_exp.log_parameters(flatten(params))
+
+
+
+        for asset_file in params["track_params"]["assets"]:
+            self.comet_exp.log_asset(asset_file)
+
+        #First asset code will be logged
+        code_file = params["track_params"]["assets"][0]
+        self.comet_exp.set_code(filename=code_file,overwrite=True)
+
+        self.comet_exp.add_tags(params["track_params"]["tags"])   
 
         self.word_dic = {v: k for k, v in dic['word_dic'].items()}
         self.answer_dic = {v: k for k, v in dic['answer_dic'].items()}

@@ -16,7 +16,7 @@ import sys
 import json
 sys.path.append('/workspace/st_vqa_entitygrid/solution/')
 #sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
-from dvqa import get_labels_and_bboxes,generate_wordgrid_emb_bboxes
+from dvqa import generate_wordgrid_emb_bboxes,generate_wordgrid_id_bboxes
 from figureqa import load_vectorizer
 from torchnlp.word_to_vector import FastText,GloVe
 
@@ -215,13 +215,15 @@ class DVQA(Dataset):
         if self.reverse_question:  # TODO: test this variant for QUES model
             question = question[::-1]
 
-        #Vectors and Bboxes
-        #embeddings,bboxes = generate_wordgrid_id_bboxes(self.id2metadata[imgfile],self.dic)
-        #embeddings,bboxes = torch.tensor(embeddings),torch.tensor(bboxes)
-        embeddings,bboxes = generate_wordgrid_emb_bboxes(self.id2metadata[imgfile],self.emb_model)
+        #IDs and BBoxes
+        embedding_ids,_ = generate_wordgrid_id_bboxes(self.id2metadata[imgfile],self.dic)
+        embedding_ids = torch.tensor(embedding_ids)
+
+        #Embeddings and BBoxes
+        embeddings,bboxes = generate_wordgrid_emb_bboxes(self.id2metadata[imgfile],self.emb_model,self.dic)
 
         ##return img, question, len(question), answer, question_class, torch_bboxes, n_bbox, index  # answer_class
-        return img, question_idx,question, len(question), answer, question_class, embeddings, bboxes, index
+        return img, question_idx,question, len(question), answer, question_class, embeddings, bboxes,embedding_ids, index
 
     def __len__(self):
         return len(self.data)
@@ -238,7 +240,7 @@ def collate_data(batch):
     #Chargrid: Batch Embeddings and BBoxes
     max_emb_length = 12
     embeddings = torch.zeros((batch_size,max_emb_length,300))
-    #embeddings = torch.zeros((batch_size,max_emb_length),dtype=torch.int64)
+    embedding_ids = torch.zeros((batch_size,max_emb_length),dtype=torch.int64)
     bboxes = torch.zeros((batch_size,max_emb_length,4),dtype=torch.int64)
     emb_lengths = torch.zeros((batch_size),dtype=torch.int64)
 
@@ -256,9 +258,8 @@ def collate_data(batch):
     for i, b in enumerate(sort_by_len):
         #Chargrid: collate labels/bboxes 
         ##image, question, length, answer, class_, bboxes, n_bbox, index = b  # destructure a batch's data
-        image, question_idx, question, length, answer, class_, embedding, bbox, index = b
+        image, question_idx, question, length, answer, class_, embedding, bbox,embedding_id, index = b
         images.append(image)
-        length = len(question_idxs)
         questions[i, :length] = question
         question_idxs[i, :length] = question_idx
         lengths.append(length)
@@ -270,6 +271,7 @@ def collate_data(batch):
         embeddings[i,:curr_len] = embedding
         bboxes[i,:curr_len] = bbox
         emb_lengths[i] = curr_len
+        embedding_ids[i,:curr_len] = embedding_id
 
         img_ids[i] = index
 
@@ -277,7 +279,7 @@ def collate_data(batch):
 
     return torch.stack(images), torch.from_numpy(question_idxs), questions, \
             lengths, torch.LongTensor(answers), question_class, \
-            embeddings,bboxes,emb_lengths, \
+            embeddings,bboxes,embedding_ids,emb_lengths, \
             img_ids
             #chargrid_batch,  \
            

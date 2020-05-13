@@ -306,11 +306,12 @@ class Encoder(nn.Module):
         #self_attended_question = F.normalize(y,p=2,dim=2)
 
         output_normed = self.norm(encoder_input)
-        _,question_output = torch.split(output_normed,h*w,1)
+        output_wordgrid,question_output = torch.split(output_normed,h*w,1)
 
         prediction = F.softmax(self.classification(question_output[:,0,:]),dim=1)
-        wordgrid = wordgrid.permute(0,2,1).view(batch_size,self.d_model,height,width)
-        return prediction,question,wordgrid#.view(batch_size,emb_size,h,w)
+        #wordgrid = wordgrid.permute(0,2,1).view(batch_size,self.d_model,height,width)
+        output_wordgrid = output_wordgrid.permute(0,2,1).view(batch_size,self.d_model,h,w)
+        return prediction,output_wordgrid#.view(batch_size,emb_size,h,w)
 
 
 

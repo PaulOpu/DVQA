@@ -42,11 +42,7 @@ class TensorBoardVisualize():
 
         self.comet_exp = comet_ml.Experiment(project_name="masterthesis")
         self.comet_exp.set_name(params["exp_name"])
-
-
         self.comet_exp.log_parameters(flatten(params))
-
-
 
         for asset_file in params["track_params"]["assets"]:
             self.comet_exp.log_asset(asset_file)
@@ -62,6 +58,8 @@ class TensorBoardVisualize():
 
         self.word_vect = np.vectorize(lambda x: self.word_dic[x] if x > 0 else "")
         self.answer_vect = np.vectorize(lambda x: self.answer_dic[x])
+
+        self.norm_img = mpl.colors.Normalize(vmin=0,vmax=1)
 
         self.hooks = {}
 
@@ -91,13 +89,13 @@ class TensorBoardVisualize():
     def comet_line(self,y_dic,prefix):
         self.comet_exp.log_metrics(y_dic,prefix=prefix,epoch=self.epoch,step=self.step)
 
-    def comet_image(self,images,chart):
+    def comet_image(self,images,chart,c_location="first"):
 
         for i,comet_image in enumerate(images):
             self.comet_exp.log_image(
                 comet_image.squeeze(0), name=f"{chart}_{i}", 
                 image_format="png",
-                image_channels="first", step=self.step)
+                image_channels=c_location, step=self.step)
 
     def add_images(self,images,chart):
 
@@ -147,7 +145,6 @@ class TensorBoardVisualize():
            f"{chart}_act_first_image{suffix}")
 
     def add_figure_with_question(self,x,image,question,answer,output,index,chart,suffix=""):
-        norm_img = mpl.colors.Normalize(vmin=-1,vmax=1)
         visu_question = self.word_vect(question)
         visu_answer = self.answer_vect(answer)
         visu_output = self.answer_vect(output)
@@ -159,12 +156,15 @@ class TensorBoardVisualize():
             fig = plt.figure()
             a = fig.add_subplot(111)
 
+            img = np.transpose(image[idx],[1,2,0]).reshape((h,w))
+            norm_img = (img - img.min()) / (img.max() - img.min())
+
             plt.imshow(
-                norm_img(np.transpose(image[idx],[1,2,0]).reshape((h,w))),
+                norm_img,
                 vmin=0.,vmax=1.,cmap="gray")
             a.text(0, 0, textwrap.fill(
                     f"{index[idx]}: " + " ".join(visu_question[idx]) + f" Answer/Output: {visu_answer[idx]}/{visu_output[idx]}",
-                    60),wrap=True,ha='left',va='bottom')
+                    60),wrap=True,ha='left',va='top')
 
             figures.append(fig)
             self.comet_exp.log_figure(figure_name=f"{chart}/sample{suffix}_{idx}", figure=fig, overwrite=False, step=self.step)

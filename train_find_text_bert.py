@@ -16,13 +16,14 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import numpy as np
 import torch.nn.functional as F
-from dataset_find_text_transf2 import DVQA, collate_data, transform
+from dataset_find_text_bert import DVQA, collate_data, transform
 import time
 import os
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import textwrap
 import seaborn as sns
+from sklearn.metrics import mean_squared_error
 
 sys.path.append('/workspace/st_vqa_entitygrid/solution/')
 #sys.path.append('/project/paul_op_masterthesis/st_vqa_entitygrid/solution/')
@@ -30,7 +31,7 @@ from dvqa import enlarge_batch_tensor
 from visualize import TensorBoardVisualize,SaveFeatures
 from sklearn.metrics import precision_recall_fscore_support
 from torch.nn import CosineSimilarity
-from model_find_text_transf2 import Encoder
+from model_find_text_bert import Encoder
 
 
 # if torch.__version__ == '1.1.0':
@@ -66,16 +67,18 @@ from torchvision.models import resnet101 as _resnet101
 
 # n_label_channels = 41
 
-def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_image=True, model_name=None):
-
+def train(epoch,tensorboard_client,global_iteration,train_set,word_dic,answer_dic,load_image=True, model_name=None):
     run_name = "train"
-    model.train(True)  # train mode
+    model.train(True)
+
+    
+      # train mode
     if isinstance(model,nn.DataParallel):
         vqa_model = model.module
     else:
         vqa_model = model
 
-    att_module = vqa_model.layers[0].multi_head_attention
+    #att_module = vqa_model.layers[0].multi_head_attention
 
     dataset = iter(train_set)
     #Debug
@@ -83,14 +86,6 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     #pbar = dataset
     n_batch = len(pbar)
     moving_loss = 0  # it will change when loop over data
-    moving_cos_sim_yes,moving_cos_sim_no = 0,0
-
-    print(device)
-    #print(next(model.parameters()).is_cuda, "next(model.parameters()).is_cuda")
-    cos_similarity = CosineSimilarity(dim=1, eps=1e-6)
-
-    wordgrid_key_hook = SaveFeatures(att_module.wordgrid_key_layer)
-    tensorboard_client.register_hook("wordgrid_key_hook",wordgrid_key_hook)
 
     answer_dic = {
         "yes":[],
@@ -99,41 +94,49 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     
 #Chargrid load labels,bboxes
 ##    for i, (image, question, q_len, answer, question_class, bboxes, n_bboxes, data_index) in enumerate(pbar):
-    for i, (image, question_idx, question, q_len, answer, question_class, embeddings,bboxes,emb_lengths, data_index) in enumerate(pbar):
+    for i, (image, question_idx, question, q_len, answer, question_class, embeddings,bboxes,embedding_ids,emb_lengths, data_index) in enumerate(pbar):
         tensorboard_client.set_epoch_step(epoch,global_iteration)
 
-        image, question, q_len, answer, bboxes, embeddings, emb_lengths  = (
+        image, question, question_idx, q_len, answer, bboxes, embeddings, emb_lengths, embedding_ids = (
             image.to(device),
             question.to(device),
-            torch.tensor(q_len),
+            question_idx.to(device),
+            torch.tensor(q_len).to(device),
             answer.to(device),
             bboxes.to(device),
             embeddings.to(device),
-            emb_lengths.to(device)
+            emb_lengths.to(device),
+            embedding_ids.to(device)
         )
-
-        tmp_batch_size = question_idx.shape[0]
 
         #Train: Batch Loop
         
         vqa_model.zero_grad()
         #output,question,wordgrid = vqa_model(image, question, q_len, embeddings, bboxes, emb_lengths)
-        prediction,question,wordgrid = vqa_model(image, question, q_len, embeddings, bboxes, emb_lengths)
 
-        label = answer.clone()
+        labels = answer.clone()
         #label[label == 6.0] = 1.
         #label[label == 7.0] = -1.
-        label[label == 6.0] = 1
-        label[label == 7.0] = 0
+        labels[labels == 6.0] = 1
+        labels[labels == 7.0] = 0
 
-        #loss = criterion(output[:,0,:],question[:,0,:], label.float())
-        loss = criterion(prediction, label)
+        #prediction,att_vector,question = vqa_model(
+        #    image, question, question_idx, q_len, embeddings, bboxes, embedding_ids, emb_lengths, labels)
+
+        loss,prediction = vqa_model(
+            image, question, question_idx, q_len, embeddings, bboxes, embedding_ids, emb_lengths, labels)
+
+        prediction = prediction.squeeze()
+        #loss = criterion(question,att_question, label.float())
+        #loss = criterion(prediction, label.float())
         loss.backward()
         optimizer.step()
 
         
         loss = loss.detach()
-        correct = prediction.argmax(1) == label
+        #correct = prediction.argmax(1) == label
+        correct = (prediction.squeeze() > 0.5) == labels
+        #correct = (cos_similarity(att_question,question) > 0.5) == (answer == 6.)
         mean_correct = (correct.sum().float() / batch_size).detach()
         
 
@@ -145,108 +148,33 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
             moving_loss = moving_loss * 0.98 + mean_correct * 0.02
 
 
-        if True == False:
-            output,question,wordgrid = output.detach(),question.detach(),wordgrid.detach()
-            cos_sim = cos_similarity(output[:,0,:],question[:,0,:])
+        #output,question,wordgrid = output.detach(),question.detach(),wordgrid.detach()
+        #output,question = att_vector.detach(),question.detach()
 
-            #Check Attention Weights
+        #cos_sim = cos_similarity(output,question)
+        cos_sim = F.mse_loss(prediction,labels,reduction="none")
 
-            
-            yes_answers = cos_sim[label == 1.]
-            no_answers = cos_sim[label == -1.]
+        #Check Attention Weights
 
-            if yes_answers.size(0) > 0:
-                if not answer_dic["yes"]:
-                    answer_dic["yes"] = yes_answers.detach().tolist()
-                else:
-                    answer_dic["yes"] += yes_answers.detach().tolist()
-
-            if no_answers.size(0) > 0:
-                if not answer_dic["no"]:
-                    answer_dic["no"] = no_answers.detach().tolist()
-                else:
-                    answer_dic["no"] += no_answers.detach().tolist()
-
-            #avg_correct = torch.mean(((cos_sim > 0.5) == (answer == 6.0)).double())
-            
-            # if moving_cos_sim_yes == 0:
-            #     moving_cos_sim_yes = answer_dic["mean_yes"]
-            #     moving_cos_sim_no  = answer_dic["mean_no"]
-            #     moving_loss = avg_correct
-            #     # print("moving_loss = correct")
-
-            # else:
-            #     moving_loss = moving_loss * 0.99 + avg_correct * 0.01
-            #     answer_dic["mean_yes"] = answer_dic["mean_yes"] * 0.99 + answer_dic["mean_yes"] * 0.01
-            #     answer_dic["mean_no"]  = answer_dic["mean_no"] * 0.99 + answer_dic["mean_no"] * 0.01
-            #     # print("moving_loss = moving_loss * 0.99 + correct * 0.01")
-
-
-            wrong_prediction = (cos_sim > 0.5) != (answer == 6.0)
-            if (torch.sum(wrong_prediction).item() > 0) and (global_iteration % train_visualization_iteration) == 0:
-
-                height,width = wordgrid.size(2),wordgrid.size(3)
-
-                visu_img = wordgrid[wrong_prediction]
-                visu_img = torch.sum(visu_img,dim=1,keepdim=True)
-                visu_img[visu_img != 0.] = 1
-                visu_img = visu_img.cpu().numpy()
-
-                visu_question = question_idx[wrong_prediction].cpu().numpy()
-                visu_answer = answer[wrong_prediction].cpu().numpy()
-                visu_output = visu_answer.copy()
-                visu_output[visu_output == 6] = 8
-                visu_output[visu_output == 7] = 6
-                visu_output[visu_output == 8] = 7
-
-                visu_data_index = data_index[wrong_prediction].data.numpy()
-                correct_class = "wrong"
-
-                tensorboard_client.add_figure_with_question(
-                    global_iteration,
-                    visu_img,
-                    visu_question,
-                    visu_answer,
-                    visu_output,
-                    visu_data_index,
-                    "Input",
-                    f"_{correct_class}")
-
-            if (global_iteration % train_visualization_iteration == 0) and (global_iteration != 0) and 0 == 1:
-                key_layer = att_module.wordgrid_key_layer
-
-                mask = wrong_prediction == False
-                n_correct = torch.sum(mask)
-                if n_correct > 0:
-                    correct_class = "correct"
-                    n_img = min(4,n_correct)
-                    tensorboard_client.add_conv2(
-                                key_layer,
-                                "wordgrid_key",
-                                "wordgrid_key_hook",
-                                mask,
-                                n_img,
-                                f"_{correct_class}"
-                            )
-                
         
-        with tensorboard_client.comet_exp.train():
-            loss_dic = {"loss":loss.item()}
-            tensorboard_client.comet_line(loss_dic,"running")
+        yes_answers = cos_sim[labels == 1]
+        no_answers = cos_sim[labels  == 0]
 
-            acc_dic = {"accuracy":moving_loss.item()}
-            tensorboard_client.comet_line(acc_dic,"moving")
+        if yes_answers.size(0) > 0:
+            if not answer_dic["yes"]:
+                answer_dic["yes"] = yes_answers.tolist()
+            else:
+                answer_dic["yes"] += yes_answers.tolist()
 
-            #binary_dic = {
-            #    "TP_yes":torch.mean(prediction[correct & (label == 1),1]),
-            #    "TP_no":torch.mean(prediction[correct & (label == 0),0]),
-            #    "FP_yes":torch.mean(prediction[~correct & (label == 1),1]),
-            #    "FP_no":torch.mean(prediction[~correct & (label == 0),0]),
-            #}
-            #tensorboard_client.comet_line(binary_dic,"pred_mean")
-        #visualize_train(
-        #    global_iteration,run_name,tensorboard_client,
-        #    loss,answer_dic)
+        if no_answers.size(0) > 0:
+            if not answer_dic["no"]:
+                answer_dic["no"] = no_answers.tolist()
+            else:
+                answer_dic["no"] += no_answers.tolist()
+
+        visualize_train(
+            global_iteration,run_name,tensorboard_client,
+            loss,moving_loss,answer_dic)
 
         #del loss
 
@@ -259,11 +187,10 @@ def train(epoch,tensorboard_client,global_iteration,word_dic,answer_dic,load_ima
     
 
 def visualize_train(global_iteration,run_name,tensorboard_client,
-    loss,answer_dic):
+    loss,moving_loss,answer_dic):
     if (global_iteration % train_progress_iteration != 0):
         return
 
-    
     # - loss
     loss_dic = {"loss":loss.item()}
     tensorboard_client.append_line(global_iteration,loss_dic,"Training/running_loss")
@@ -276,12 +203,12 @@ def visualize_train(global_iteration,run_name,tensorboard_client,
         "max_no":np.max(answer_dic["no"])
         }
     
-    # acc_dic = {"accuracy":moving_loss.detach().item()}
-    # tensorboard_client.append_line(global_iteration,acc_dic,"Training/accuracy")
+    acc_dic = {"accuracy":moving_loss.item()}
+    tensorboard_client.append_line(global_iteration,acc_dic,"Training/accuracy")
     
     with tensorboard_client.comet_exp.train():
         tensorboard_client.comet_line(loss_dic,"running")
-        #tensorboard_client.comet_line(acc_dic,"moving")
+        tensorboard_client.comet_line(acc_dic,"moving")
         tensorboard_client.comet_line(output_dic,"cos_sim")
 
 
@@ -289,58 +216,58 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     #run_name = val_split
     
     print("Inside validation ", epoch)
-    dataset = iter(valid_set)
+    dataset = tqdm(iter(valid_set))
     model.eval()  # eval_mode
     class_correct = Counter()
     class_total = Counter()
-    losses,prediction,all_output_count,correct_output_count,all_answer_count = [],[],Counter(),Counter(),Counter()
+    losses,prediction= [],[]
     
     with torch.no_grad():
 
         ##for i, (image, question, q_len, answer, answer_class, bboxes, n_bboxes, data_index) in enumerate(tqdm(dataset)):
-        for i, (image, question_idx, question, q_len, answer, question_class, embeddings,bboxes,emb_lengths, data_index) in enumerate(tqdm(dataset)):
+        for i, (image, question_idx, question, q_len, answer, question_class, embeddings,bboxes,embedding_ids,emb_lengths, data_index) in enumerate(dataset):
 
-            image, question, q_len, answer, bboxes, embeddings, emb_lengths  = (
+            image, question, question_idx, q_len, answer, bboxes, embeddings, emb_lengths, embedding_ids = (
                 image.to(device),
                 question.to(device),
-                torch.tensor(q_len),
+                question_idx.to(device),
+                torch.tensor(q_len).to(device),
                 answer.to(device),
                 bboxes.to(device),
                 embeddings.to(device),
-                emb_lengths.to(device)
+                emb_lengths.to(device),
+                embedding_ids.to(device)
             )
 
-            #batch_size = labels.shape[0]
-            #n_channel = labels.shape[-1]
-            tmp_batch_size = question.shape[0]
-            
-            output,question,wordgrid,attention_weights = model(image, question, q_len, embeddings, bboxes, emb_lengths)
+            labels = answer.clone()
+            #label[label == 6.0] = 1.
+            #label[label == 7.0] = -1.
+            labels[labels == 6.0] = 1
+            labels[labels == 7.0] = 0
 
-            label = answer.clone()
-            label[label == 6.0] = 1.
-            label[label == 7.0] = -1.
-
-            loss = criterion(output, question.squeeze(),label)
-
-            cos_sim = cos_similarity(output,question.squeeze())
+            #output,question,wordgrid = vqa_model(image, question, q_len, embeddings, bboxes, emb_lengths)
+            #output,att_vector,question = model(
+            loss,output = model(
+                image, question, question_idx, q_len, embeddings, bboxes, embedding_ids, emb_lengths, labels)
 
             
 
-            output = model(image, question, q_len, encoded_chargrid)
-            cpu_output = output.data.cpu()
-            loss = criterion(cpu_output, answer)
+            output = output.squeeze()
+            #loss = criterion(output,labels.float())
+
+            output = output.cpu()
             losses.append(loss.item())
 
-            argmax_output = cpu_output.numpy().argmax(1)
-            numpy_answer = answer.numpy()
+            argmax_output = output > 0.5
+            answer = answer.cpu() == 6
             
-            correct = argmax_output == numpy_answer
-            for c, class_ in zip(correct, answer_class):
+            correct = argmax_output == answer
+            for c, class_ in zip(correct, question_class):
                 if c:  # if correct
                     class_correct[class_] += 1
                 class_total[class_] += 1
 
-            prediction.append([data_index.numpy(),numpy_answer,argmax_output])
+            prediction.append([data_index.numpy(),answer.numpy().astype(int),output.numpy()])
 
             #all_output_count.update(argmax_output)
             #correct_output_count.update(argmax_output[correct])
@@ -369,12 +296,31 @@ def valid(epoch,tensorboard_client,global_iteration, valid_set, load_image=True,
     total_score = class_correct['total'] / class_total['total']
     print('Avg Acc: {:.5f}'.format(total_score))
 
-    visualize_val(
-        global_iteration,tensorboard_client,val_split,len(dataset),epoch,
-        class_total,class_correct,losses,
-        prediction)
+    #visualize_val(
+    #    global_iteration,tensorboard_client,val_split,len(dataset),epoch,
+    #    class_total,class_correct,losses,
+    #    prediction)
+
+    tmp_visualize_val(tensorboard_client,val_split,losses,prediction)
 
     return prediction,total_score
+
+def tmp_visualize_val(tensorboard_client,val_split,losses,prediction):
+
+    total_loss = mean_squared_error(prediction[2],prediction[1])
+
+    mean_yes_values = np.mean(prediction[2][prediction[1] == 1])
+    mean_no_values = np.mean(prediction[2][prediction[1] == 0])
+
+    comet_dic = {
+        "loss":total_loss,
+        "yes_output":mean_yes_values,
+        "no_output":mean_no_values
+    }
+
+    with tensorboard_client.comet_exp.test():
+        tensorboard_client.comet_line(comet_dic,f"{val_split}_mean")
+
 
 def visualize_val(
     global_iteration,tensorboard_client,val_split,n_batch,epoch,
@@ -475,6 +421,12 @@ if __name__ == '__main__':
     train_visualization_iteration = params["visu_params"]["train_visualization_iteration"]
     validation_epoch = params["visu_params"]["validation_epoch"]
 
+    heads = params["model_params"]["heads"]
+    layers = params["model_params"]["layers"]
+    d_model = params["model_params"]["d_model"]
+    ff_size = params["model_params"]["ff_size"]
+    max_pos = params["model_params"]["max_pos"]
+    num_labels = params["model_params"]["num_labels"]
    
 
     with open(os.path.join(data_path,'dic.pkl'), 'rb') as f:
@@ -489,13 +441,16 @@ if __name__ == '__main__':
     print(n_answers, "n_answers")
 
     if model_name == "SANVQA" or "SANVQAbeta":
-        model = Encoder()#n_answers, n_vocab=n_words, encoded_image_size=(14 if load_from_hdf5 == False else 7))
+        model = Encoder(
+            n_vocab=n_words,d_model=d_model,n_head=heads,n_layer=layers,
+            ff_neurons=ff_size,max_pos=max_pos,num_labels=num_labels)#n_answers, n_vocab=n_words, encoded_image_size=(14 if load_from_hdf5 == False else 7))
         #model = nn.DataParallel(model)
         load_image = True
         
         model = model.to(device)
 
-    criterion = nn.CrossEntropyLoss()
+    #criterion = nn.CrossEntropyLoss()
+    criterion = nn.MSELoss()
     #criterion = nn.CosineEmbeddingLoss()
     #criterion = nn.BCELoss()
 
@@ -587,13 +542,27 @@ if __name__ == '__main__':
         #     model.load_state_dict(
         #         torch.load(checkpoint_name, map_location='cuda' if torch.cuda.is_available() else 'cpu'))
         #     continue
+
         global_iteration,moving_loss = train(
             epoch,
             tensorboard_client,
             global_iteration,
+            train_set,
             train_set.dataset.word_class,
             train_set.dataset.answer_class,
             load_image=load_image, model_name=model_name)
+
+        valid(
+            epoch,
+            tensorboard_client,
+            global_iteration,
+            train_set,
+            load_image=load_image, model_name=model_name)
+
+
+        
+
+        
         #Debug        
         tensorboard_client.close()
 

@@ -75,11 +75,11 @@ class Encoder(nn.Module):
             input_ids=bert_input,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            labels=labels.float()
+            #position_ids=position_ids,
+            labels=labels
         )
 
-        return loss,logits
+        return loss,logits,attentions,bert_input
 
         #Linear Layer with CLS token
         prediction = self.classification(pooler_output)

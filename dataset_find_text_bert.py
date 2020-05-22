@@ -212,7 +212,7 @@ class DVQA(Dataset):
         question = self.emb_model[question]
         
 
-        if self.reverse_question:  # TODO: test this variant for QUES model
+        if self.reverse_question == "True":  # TODO: test this variant for QUES model
             question = question[::-1]
 
         #IDs and BBoxes

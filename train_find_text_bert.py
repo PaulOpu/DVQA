@@ -34,6 +34,8 @@ from sklearn.metrics import precision_recall_fscore_support
 from torch.nn import CosineSimilarity
 from model_find_text_bert import Encoder
 
+from transformers import AdamW,get_linear_schedule_with_warmup
+
 
 # if torch.__version__ == '1.1.0':
 #     from torchvision.models.resnet import resnet101 as _resnet101
@@ -542,6 +544,7 @@ if __name__ == '__main__':
     criterion = nn.MSELoss()
     #criterion = nn.CosineEmbeddingLoss()
     #criterion = nn.BCELoss()
+    
 
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     #optimizer = torch.optim.SGD(model.parameters())

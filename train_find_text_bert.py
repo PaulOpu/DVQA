@@ -545,11 +545,7 @@ if __name__ == '__main__':
     #criterion = nn.CosineEmbeddingLoss()
     #criterion = nn.BCELoss()
     
-
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    #optimizer = torch.optim.SGD(model.parameters())
-    # scheduler = StepLR(optimizer, step_size=lr_step, gamma=lr_gamma) # Decays the learning rate of each parameter group by gamma every step_size epochs.
-
+    
     train_set = DataLoader(
         DVQA(
             data_path,
@@ -566,6 +562,16 @@ if __name__ == '__main__':
         shuffle=True,
         collate_fn=collate_data,
     )
+    n_steps = len(train_set)*n_epoch
+    warm_up = int(n_steps*0.1)
+
+    optimizer = AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    optimizer = get_linear_schedule_with_warmup(optimizer,warm_up,n_steps)
+    #optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    #optimizer = torch.optim.SGD(model.parameters())
+    # scheduler = StepLR(optimizer, step_size=lr_step, gamma=lr_gamma) # Decays the learning rate of each parameter group by gamma every step_size epochs.
+
+    
 
     #Debug
     valid_set_easy = DataLoader(
